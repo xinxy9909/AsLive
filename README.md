@@ -1,5 +1,7 @@
 # Real-Time Voice Assistant (Lilith)
 
+![AsLive](static/AsLive.png)
+
 这是一个基于 Web 的实时语音交互系统，集成了 ASR (语音识别)、LLM (大语言模型) 和 TTS (语音合成)，并提供了一个高品质的 3D 可视化界面。
 
 ## 🌟 核心特性
