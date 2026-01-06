@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AsVox | Immersive Audio Intelligence</title>
+    <!-- 引入字体和图标 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Courier+Prime&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- 引入 Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+    <!-- UI 图层 -->
+    <div id="ui-layer">
+        <!-- 顶部: 品牌和状态 -->
+        <header class="header">
+            <div class="brand">AsVox <span class="version">AI CORE v2.1</span></div>
+            <div class="status-panel">
+                <div class="status-item">
+                    <span class="status-dot healthy"></span>
+                    <span class="status-text">SYSTEM ONLINE</span>
+                </div>
+                <div class="track-info" id="status-display">WAITING FOR INPUT...</div>
+            </div>
+        </header>
+
+        <!-- 中间左侧: 历史记录面板 -->
+        <div class="chat-panel">
+            <div class="panel-header">
+                <span><i class="fas fa-history"></i> SESSION LOG</span>
+                <button class="icon-btn" id="clear-history" title="Clear History"><i class="fas fa-trash-alt"></i></button>
+            </div>
+            <div class="chat-history" id="chat-history">
+                <!-- 消息将动态插入这里 -->
+                <div class="message system">
+                    <div class="message-content">系统已就绪，请按住空格键说话或输入文本。</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部栏: 控制区 -->
+        <footer class="footer">
+            <!-- 左侧: 文本输入 -->
+            <div class="footer-left">
+                <div class="input-group">
+                    <input type="text" id="text-input" placeholder="Enter command or text..." autocomplete="off">
+                    <button id="send-btn"><i class="fas fa-paper-plane"></i></button>
+                </div>
+            </div>
+
+            <!-- 中间: 录音按钮 -->
+            <div class="footer-center">
+                <button id="record-btn" class="main-ctrl-btn">
+                    <div class="mic-icon"><i class="fas fa-microphone"></i></div>
+                    <span class="btn-label">TAP TO SPEAK</span>
+                    <div class="pulse-ring"></div>
+                </button>
+            </div>
+
+            <!-- 右侧: 频谱监控 -->
+            <div class="footer-right">
+                <div class="monitor-label">AUDIO_FREQ // MONITOR</div>
+                <canvas id="mini-monitor" width="160" height="50"></canvas>
+            </div>
+        </footer>
+    </div>
+
+    <!-- 3D 场景容器 -->
+    <div id="canvas-container"></div>
+    
+    <!-- 音频元素 -->
+    <audio id="audio-player" style="display: none;"></audio>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
