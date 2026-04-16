@@ -11,6 +11,9 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen-plus")
 
+# Monitor Agent 配置
+MONITOR_MODEL_NAME = os.getenv("MONITOR_MODEL_NAME", "qwen-plus")
+
 # ASR 配置（DashScope Paraformer）
 ASR_MODEL_NAME = os.getenv("ASR_MODEL_NAME", "paraformer-realtime-v2")
 

@@ -6,7 +6,7 @@ import logging
 import os
 import uuid
 
-from core.agents import AINetiveAgent, OrganoidAgent
+from core.agents import AINetiveAgent, OrganoidAgent, MonitorAgent
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,7 @@ class AgentType:
     """Agent 类型常量"""
     AI_NATIVE = "ai-native"
     ORGANOID = "organoid"
+    MONITOR = "monitor"
 
 
 # 配置
@@ -25,6 +26,7 @@ DEFAULT_AGENT = os.getenv("DEFAULT_AGENT", AgentType.AI_NATIVE)
 _agents = {
     AgentType.AI_NATIVE: AINetiveAgent(),
     AgentType.ORGANOID: OrganoidAgent(),
+    AgentType.MONITOR: MonitorAgent(),
 }
 
 
@@ -35,6 +37,7 @@ class IntentClassifier:
     
     # 意图描述
     INTENT_DESCRIPTIONS = {
+        AgentType.MONITOR: "视频监控管理 - 用户要求操作视频监控、摄像头相关功能",
         AgentType.ORGANOID: "多模态推理 - 用户的问题需要进行深度推理和多步骤分析",
         AgentType.AI_NATIVE: "通用对话 - 一般性聊天、日常对话和简单问答",
     }
@@ -67,7 +70,7 @@ class IntentClassifier:
 
 用户问题："{text}"
 
-请只返回一个Agent的名称（ai-native 或 organoid），不要返回其他内容。"""
+请只返回一个Agent的名称（ai-native、organoid 或 monitor），不要返回其他内容。"""
             
             # 使用 AI-Native Agent 进行意图识别
             ai_native = _agents[AgentType.AI_NATIVE]
@@ -81,7 +84,10 @@ class IntentClassifier:
             logger.info(f"Intent classification result: {result}")
             
             # 解析结果，匹配 Agent 类型
-            if "organoid" in result:
+            if "monitor" in result:
+                logger.info(f"Selected agent: monitor for query: {text[:50]}...")
+                return AgentType.MONITOR
+            elif "organoid" in result:
                 logger.info(f"Selected agent: organoid for query: {text[:50]}...")
                 return AgentType.ORGANOID
             elif "ai-native" in result or "ai native" in result:
