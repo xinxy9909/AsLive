@@ -77,10 +77,75 @@ class ChatRequest(BaseModel):
     speed: float = 1.0
 
 
+class URLStripper:
+    """
+    流式 URL 过滤状态机。
+
+    逐字符处理流式 chunk，跨 chunk 追踪并丢弃 URL。
+    原理：
+      - normal  : 普通输出，遇到 'h'/'f' 可能是协议头，进入 prefix 模式
+      - prefix  : 缓冲潜在协议字符（如 'htt'、'http:'），确认后进入 url 模式或退回 normal
+      - url     : 丢弃所有字符，直到遇到 URL 终止符（空白、非 ASCII）
+    """
+
+    _SCHEMES = ('https://', 'http://', 'ftp://')
+
+    def __init__(self):
+        self._mode = 'normal'   # 'normal' | 'prefix' | 'url'
+        self._buf = ''           # prefix 模式下的缓冲
+
+    def feed(self, text: str) -> str:
+        """处理一个 chunk，返回去除 URL 后的文本。"""
+        out = []
+        for ch in text:
+            if self._mode == 'normal':
+                if ch in ('h', 'f'):
+                    self._mode = 'prefix'
+                    self._buf = ch
+                else:
+                    out.append(ch)
+
+            elif self._mode == 'prefix':
+                cand = self._buf + ch
+                if cand in self._SCHEMES:
+                    # 完整协议头，丢弃，进入 url 模式
+                    self._mode = 'url'
+                    self._buf = ''
+                elif any(s.startswith(cand) for s in self._SCHEMES):
+                    # 仍是合法前缀，继续缓冲
+                    self._buf = cand
+                else:
+                    # 确认不是 URL，输出已缓冲字符，重新处理当前字符
+                    out.append(self._buf)
+                    self._buf = ''
+                    self._mode = 'normal'
+                    if ch in ('h', 'f'):
+                        self._mode = 'prefix'
+                        self._buf = ch
+                    else:
+                        out.append(ch)
+
+            else:  # url 模式
+                # 空白或非 ASCII（中文等）视为 URL 结束，输出该终止符
+                if ch in ' \n\r\t' or ord(ch) > 127:
+                    self._mode = 'normal'
+                    out.append(ch)
+                # 其余字符属于 URL，丢弃
+
+        return ''.join(out)
+
+    def flush(self) -> str:
+        """流结束时调用，输出 prefix 缓冲中未确认的字符。"""
+        result = self._buf if self._mode == 'prefix' else ''
+        self._mode = 'normal'
+        self._buf = ''
+        return result
+
+
 def clean_text_for_tts(text: str) -> str:
-    """清理文本用于 TTS"""
+    """清理完整文本用于对话历史（非流式，正则实现）。"""
     import re
-    # 如果包含对话格式，提取最后一个助手回复
+    # 提取最后一个助手回复
     if '助手:' in text or '助手：' in text:
         parts = re.split(r'助手[：:]\s*', text)
         if len(parts) > 1:
@@ -89,6 +154,21 @@ def clean_text_for_tts(text: str) -> str:
             text = last_response
     # 移除角色前缀
     text = re.sub(r'^(用户|助手|User|Assistant)[：:]\s*', '', text, flags=re.MULTILINE)
+    # markdown 链接 [text](url) → text
+    text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
+    # 移除所有 URL
+    text = re.sub(r'(?:https?|ftp)://\S+', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def _clean_sentence(text: str) -> str:
+    """清理流式句子（URL 已在上游过滤，只做角色前缀和空格处理）。"""
+    import re
+    text = re.sub(r'^(用户|助手|User|Assistant)[：:]\s*', '', text, flags=re.MULTILINE)
+    # 清除 URL 过滤后可能残留的空 markdown 括号，如 [百度]()
+    text = re.sub(r'\[([^\]]+)\]\(\s*\)', r'\1', text)
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 
@@ -108,9 +188,9 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
     # 构建上下文
     context_messages = conversation_history[-6:]
     
-    buffer = ""
-    full_response = ""
-    audio_files = []
+    clean_buffer = ""        # URL 已过滤的文本，用于句子切割和 TTS
+    full_response = ""       # 原始完整回复，用于保存历史
+    url_stripper = URLStripper()
     audio_index = 0
     in_think_tag = False
     
@@ -157,30 +237,31 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
         # 发送文本片段
         yield f"data: {json.dumps({'type': 'text', 'content': chunk})}\n\n"
 
-        # 处理 <think> 标签
+        # 处理 <think> 标签（think 内容不送 TTS，但仍过滤以维护 url_stripper 状态）
         if '<think>' in chunk:
             in_think_tag = True
             before_think = chunk.split('<think>')[0]
             if before_think:
-                buffer += before_think
+                clean_buffer += url_stripper.feed(before_think)
             continue
 
         if '</think>' in chunk:
             in_think_tag = False
             after_think = chunk.split('</think>')[-1]
             if after_think:
-                buffer += after_think
+                clean_buffer += url_stripper.feed(after_think)
             continue
 
         if in_think_tag:
             continue
 
-        buffer += chunk
+        # chunk 过 URL 过滤器，结果写入 clean_buffer
+        clean_buffer += url_stripper.feed(chunk)
 
-        # 检测句子边界
+        # 在已清洁文本上做句子切割（此时 '.' 不会出现在 URL 中）
         while True:
             delimiter_pos = -1
-            for i, char in enumerate(buffer):
+            for i, char in enumerate(clean_buffer):
                 if char in SENTENCE_DELIMITERS:
                     delimiter_pos = i
                     break
@@ -188,16 +269,14 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
             if delimiter_pos == -1:
                 break
 
-            # 提取句子
-            sentence = buffer[:delimiter_pos + 1]
-            buffer = buffer[delimiter_pos + 1:]
+            sentence = clean_buffer[:delimiter_pos + 1]
+            clean_buffer = clean_buffer[delimiter_pos + 1:]
 
             # 打断检测：TTS 合成前再检查一次
             if current_gen != my_gen:
                 return
 
-            # 清理并合成 TTS
-            clean_text = clean_text_for_tts(sentence)
+            clean_text = _clean_sentence(sentence)
             if clean_text:
                 audio_filename = await synthesize_and_save(clean_text, audio_index)
                 if audio_filename:
@@ -206,10 +285,11 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
 
         # 让出控制权
         await asyncio.sleep(0)
-    
-    # 处理剩余内容
-    if buffer.strip():
-        clean_text = clean_text_for_tts(buffer)
+
+    # 处理剩余内容（flush URL stripper 中可能缓冲的前缀字符）
+    clean_buffer += url_stripper.flush()
+    if clean_buffer.strip():
+        clean_text = _clean_sentence(clean_buffer)
         if clean_text:
             audio_filename = await synthesize_and_save(clean_text, audio_index)
             if audio_filename:
