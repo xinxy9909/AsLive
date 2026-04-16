@@ -6,15 +6,13 @@ import asyncio
 import json
 import uuid
 import os
+import subprocess
 from pathlib import Path
-from typing import Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import soundfile as sf
-import numpy as np
 
 # 导入核心模块
 from core.asr import ASRWrapper
@@ -119,25 +117,11 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
     # 定义异步 TTS 函数
     async def synthesize_and_save(text, index):
         try:
-            # 运行在线程池中，避免阻塞事件循环
-            def _synthesize():
-                phonemes, _ = tts._g2p_model(text)
-                samples, sample_rate = tts._kokoro_model.create(
-                    phonemes,
-                    voice=speak_id,
-                    speed=speed,
-                    is_phonemes=True
-                )
-                return samples, sample_rate
-
-            samples, sample_rate = await asyncio.to_thread(_synthesize)
-            
-            # 保存音频文件
-            audio_filename = f"{session_id}_{index}.wav"
+            mp3_data = await tts.synthesize_async(text, speak_id, speed)
+            audio_filename = f"{session_id}_{index}.mp3"
             audio_path = OUTPUT_DIR / audio_filename
-            # 写入文件也是 IO 操作，也可以放到线程池
-            await asyncio.to_thread(sf.write, str(audio_path), samples, sample_rate)
-            
+            with open(audio_path, "wb") as f:
+                f.write(mp3_data)
             return audio_filename
         except Exception as e:
             print(f"TTS Error: {e}")
@@ -240,44 +224,56 @@ async def audio_chat(
 ):
     """语音聊天接口"""
     asr, llm, tts = get_models()
-    
-    # 保存上传的音频
-    temp_path = OUTPUT_DIR / f"temp_{uuid.uuid4()}.wav"
+
+    uid = uuid.uuid4().hex
+    raw_path = OUTPUT_DIR / f"temp_{uid}_raw"
+    wav_path = OUTPUT_DIR / f"temp_{uid}.opus"
+
     content = await audio.read()
-    with open(temp_path, "wb") as f:
+    with open(raw_path, "wb") as f:
         f.write(content)
-    
+
+    try:
+        # 用 ffmpeg 将任意容器（WEBM/MP4/…）解包为裸 OPUS 流（DashScope 支持）
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(raw_path),
+             "-c:a", "libopus", "-ar", "16000", "-ac", "1", "-f", "opus", str(wav_path)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"音频转换失败: {result.stderr[-300:]}")
+    except Exception as e:
+        raw_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        raw_path.unlink(missing_ok=True)
+
     try:
         # ASR 识别
-        user_text = asr.transcribe(wav_dir=str(temp_path))
-        
-        # 删除临时文件
-        os.remove(temp_path)
-        
-        if not user_text.strip():
-            raise HTTPException(status_code=400, detail="未识别到有效语音")
-        
-        # 返回识别结果和流式响应
-        async def generate():
-            # 先发送识别结果
-            yield f"data: {json.dumps({'type': 'asr', 'text': user_text})}\n\n"
-            
-            # 然后进行流式处理
-            async for event in process_streaming(user_text, speak_id, speed):
-                yield event
-        
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
-        )
+        user_text = asr.transcribe(wav_dir=str(wav_path))
     except Exception as e:
-        if temp_path.exists():
-            os.remove(temp_path)
-        raise HTTPException(status_code=500, detail=str(e))
+        wav_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"ASR错误: {e}")
+    finally:
+        wav_path.unlink(missing_ok=True)
+
+    if not user_text.strip():
+        raise HTTPException(status_code=400, detail="未识别到有效语音")
+
+    # 返回识别结果和流式响应
+    async def generate():
+        yield f"data: {json.dumps({'type': 'asr', 'text': user_text})}\n\n"
+        async for event in process_streaming(user_text, speak_id, speed):
+            yield event
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @app.get("/history")
