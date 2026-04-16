@@ -7,12 +7,14 @@ import json
 import uuid
 import os
 import subprocess
+import urllib.parse
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import httpx
 
 # 导入核心模块
 from core.asr import ASRWrapper
@@ -320,14 +322,58 @@ async def clear_history():
     return {"status": "ok"}
 
 
+@app.get("/api/hls-proxy")
+async def hls_proxy(url: str):
+    """
+    HLS 流代理，解决 CORS 跨域问题
+    允许 WebGL 使用视频帧作为纹理
+    """
+    try:
+        # 解码 URL（前端会编码）
+        decoded_url = urllib.parse.unquote(url)
+        
+        # 验证 URL 来自允许的域
+        allowed_domains = [
+            "monitor.data.labillion.cn",
+            "localhost",
+            "127.0.0.1"
+        ]
+        
+        parsed = urllib.parse.urlparse(decoded_url)
+        if parsed.netloc not in allowed_domains:
+            raise HTTPException(status_code=403, detail="Unauthorized domain")
+        
+        # 获取远程资源
+        async with httpx.AsyncClient() as client:
+            response = await client.get(decoded_url, follow_redirects=True)
+            response.raise_for_status()
+            
+            # 返回内容并添加 CORS 头
+            return StreamingResponse(
+                iter([response.content]),
+                media_type=response.headers.get("content-type", "application/vnd.apple.mpegurl"),
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Range",
+                    "Access-Control-Expose-Headers": "Content-Length, Content-Type",
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                }
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"Proxy request failed: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
+
+
 @app.on_event("startup")
 async def startup():
-    """启动时预加载模型"""
-    print("服务器启动中...")
-    print("正在预加载模型，请稍候...")
-    # 预加载模型，避免第一次请求卡顿
-    get_models()
-    print("服务器启动完成，模型已就绪！")
+     """启动时预加载模型"""
+     print("服务器启动中...")
+     print("正在预加载模型，请稍候...")
+     # 预加载模型，避免第一次请求卡顿
+     get_models()
+     print("服务器启动完成，模型已就绪！")
 
 
 if __name__ == "__main__":

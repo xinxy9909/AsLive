@@ -3,6 +3,7 @@ Monitor Agent - 摄像头状态管理模块
 """
 
 import logging
+import urllib.parse
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -32,19 +33,29 @@ class Camera:
         return {
             "name": self.name,
             "platform": self.platform,
-            "url": self.url,
+            "url": self.get_proxied_url(),  # 使用代理 URL
             "visible": self.visible,
             "status": self.status.value,
             "zoom_level": self.zoom_level,
         }
+    
+    def get_proxied_url(self) -> str:
+        """获取 CORS 代理 URL"""
+        # 如果已经是代理 URL，直接返回
+        if self.url.startswith("/api/hls-proxy"):
+            return self.url
+        # 否则转换为代理 URL
+        encoded_url = urllib.parse.quote(self.url, safe='')
+        return f"/api/hls-proxy?url={encoded_url}"
 
 
 class MonitorState:
     """监控状态管理器"""
     
     # 摄像头配置数据
+    # JinLiLite = 锦鲤平台, ChiWen = 鸱吻平台
     CAMERA_CONFIG = {
-        "JinLiLite": [
+        "JinLiLite": [  # 锦鲤平台
             {
                 "name": "JinLiLite1",
                 "url": "https://monitor.data.labillion.cn/live/0f47c97f-8098-4f32-a34a-7eb8ea70cb26_1080p.m3u8"
@@ -58,7 +69,7 @@ class MonitorState:
                 "url": "https://monitor.data.labillion.cn/live/8825673d-4ad5-4bae-9345-d5edb45feda5_1080p.m3u8"
             },
         ],
-        "ChiWen": [
+        "ChiWen": [  # 鸱吻平台
             {
                 "name": "ChiWen1",
                 "url": "https://monitor.data.labillion.cn/live/8825673d-4ad5-4bae-9345-d5edb45fedb2_1080p.m3u8"

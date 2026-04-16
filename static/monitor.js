@@ -112,6 +112,7 @@ class MonitorManager {
         video.className = 'monitor-video';
         video.playsInline = true;
         video.muted = true;
+        video.crossOrigin = 'anonymous';
         
         // 加载动画
         const loadingEl = document.createElement('div');
@@ -266,10 +267,19 @@ class MonitorManager {
         
         if (!video || !config) return;
         
-        video.addEventListener('loadstart', () => this.setStatus(monitorId, 'LOADING'));
-        video.addEventListener('loadeddata', () => this.setStatus(monitorId, 'ONLINE'));
-        video.addEventListener('error', () => this.setStatus(monitorId, 'ERROR'));
-        video.addEventListener('stalled', () => this.setStatus(monitorId, 'STALLED'));
+         video.addEventListener('loadstart', () => this.setStatus(monitorId, 'LOADING'));
+         video.addEventListener('loadeddata', () => this.setStatus(monitorId, 'ONLINE'));
+         video.addEventListener('error', (e) => {
+             console.error(`Video error for ${monitorId}:`, e);
+             this.setStatus(monitorId, 'ERROR');
+         });
+         video.addEventListener('stalled', () => this.setStatus(monitorId, 'STALLED'));
+         
+         // CORS error detection
+         video.addEventListener('securitypolicyviolation', (e) => {
+             console.error(`CORS security policy violation for ${monitorId}:`, e);
+             this.setStatus(monitorId, 'CORS_ERROR');
+         });
         
         if (window.HLS && HLS.isSupported()) {
             const hls = new HLS({
@@ -389,12 +399,99 @@ class MonitorManager {
         if (loadingEl) {
             loadingEl.style.display = status === 'LOADING' ? 'flex' : 'none';
         }
-    }
-    
-    /**
-     * 切换静音
-     * @param {string} monitorId 
-     */
+     }
+     
+     /**
+      * 设置摄像头缩放级别
+      * @param {string} monitorId 
+      * @param {string} zoomLevel - 'fullscreen', 'large', 'medium', 'small', 'normal'
+      */
+     setZoomLevel(monitorId, zoomLevel = 'normal') {
+         const panel = document.getElementById(`monitor-${monitorId}`);
+         if (!panel) return;
+         
+         // 移除所有现有的 zoom 类
+         panel.classList.remove('zoom-fullscreen', 'zoom-large', 'zoom-medium', 'zoom-small', 'zoom-normal');
+         
+         // 根据 zoomLevel 设置对应的样式类和大小
+         switch(zoomLevel) {
+             case 'fullscreen':
+                 panel.classList.add('zoom-fullscreen');
+                 panel.style.zIndex = '9999';
+                 // 为全屏模式添加关闭按钮和按 ESC 键退出的支持
+                 this.addFullscreenExitHandler(monitorId);
+                 break;
+             case 'large':
+                 panel.classList.add('zoom-large');
+                 panel.style.zIndex = '500';
+                 break;
+             case 'medium':
+                 panel.classList.add('zoom-medium');
+                 panel.style.zIndex = '100';
+                 break;
+             case 'small':
+                 panel.classList.add('zoom-small');
+                 panel.style.zIndex = '10';
+                 break;
+             default:
+                 panel.classList.add('zoom-normal');
+                 panel.style.zIndex = 'auto';
+         }
+         
+         // 存储当前的 zoom 级别
+         this.monitorZoomLevels = this.monitorZoomLevels || {};
+         this.monitorZoomLevels[monitorId] = zoomLevel;
+         
+         console.log(`Set zoom level for ${monitorId}: ${zoomLevel}`);
+     }
+     
+     /**
+      * 为全屏模式添加退出处理
+      * @param {string} monitorId 
+      */
+     addFullscreenExitHandler(monitorId) {
+         const panel = document.getElementById(`monitor-${monitorId}`);
+         if (!panel) return;
+         
+         // 如果已经添加过处理器，先移除
+         if (panel.dataset.fullscreenHandlerAdded) {
+             return;
+         }
+         
+         // 标记已添加处理器
+         panel.dataset.fullscreenHandlerAdded = 'true';
+         
+         // 添加 ESC 键退出处理
+         const escHandler = (e) => {
+             if (e.key === 'Escape') {
+                 this.setZoomLevel(monitorId, 'normal');
+                 document.removeEventListener('keydown', escHandler);
+                 panel.dataset.fullscreenHandlerAdded = 'false';
+             }
+         };
+         
+         document.addEventListener('keydown', escHandler);
+         
+         // 添加点击面板外部退出的功能（可选）
+         const clickHandler = (e) => {
+             // 仅当点击在容器外部时触发
+             if (!panel.contains(e.target) && !e.target.closest('.monitor-panel')) {
+                 this.setZoomLevel(monitorId, 'normal');
+                 document.removeEventListener('click', clickHandler);
+                 panel.dataset.fullscreenHandlerAdded = 'false';
+             }
+         };
+         
+         // 延迟添加点击处理器，避免立即触发
+         setTimeout(() => {
+             document.addEventListener('click', clickHandler);
+         }, 100);
+     }
+     
+     /**
+      * 切换静音
+      * @param {string} monitorId 
+      */
     toggleMute(monitorId) {
         const video = this.videoElements.get(monitorId);
         if (!video) return;

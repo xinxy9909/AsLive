@@ -27,17 +27,23 @@ class Monitor3DIntegration {
      * @param {HTMLVideoElement} videoElement 
      */
     createVideoTexture(monitorId, videoElement) {
-        // 创建视频纹理
-        const texture = new THREE.VideoTexture(videoElement);
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.format = THREE.RGBFormat;
-        
-        // 存储纹理
-        this.videoTextures.set(monitorId, texture);
-        
-        return texture;
+        try {
+            // 创建视频纹理
+            const texture = new THREE.VideoTexture(videoElement);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.format = THREE.RGBFormat;
+            
+            // 存储纹理
+            this.videoTextures.set(monitorId, texture);
+            
+            return texture;
+        } catch (error) {
+            console.error(`[Monitor3D] Failed to create texture for ${monitorId}:`, error);
+            // Return a fallback placeholder texture
+            return new THREE.MeshBasicMaterial({ color: 0x333333 });
+        }
     }
     
     /**

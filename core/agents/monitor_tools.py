@@ -272,17 +272,26 @@ class MonitorTools:
                 platform if platform != "all" else None
             )
             
+            hidden_cameras = []
+            for camera_name in hidden_list:
+                camera = self.state.get_camera(camera_name)
+                if camera:
+                    hidden_cameras.append({
+                        "camera_name": camera.name,
+                        "url": camera.url,
+                        "platform": camera.platform,
+                        "visible": camera.visible,
+                        "status": camera.status.value
+                    })
+            
             result = {
                 "status": "success",
                 "action": "hide_all_cameras",
-                "data": {
-                    "platform": platform,
-                    "hidden_cameras": hidden_list,
-                    "message": f"已隐藏 {len(hidden_list)} 个摄像头"
-                }
+                "data": hidden_cameras,
+                "message": f"已隐藏 {len(hidden_cameras)} 个摄像头"
             }
             
-            logger.info(f"Hid {len(hidden_list)} cameras on platform: {platform}")
+            logger.info(f"Hid {len(hidden_cameras)} cameras on platform: {platform}")
             return result
         
         except Exception as e:

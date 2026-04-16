@@ -343,43 +343,51 @@ function handleSingleCameraAction(action, cameraData) {
      
      const cameraName = cameraData.camera_name;
      const cameraUrl = cameraData.url;
+     const zoomLevel = cameraData.zoom_level || 'normal';
      
      if (window.monitorManager && !window.monitorManager.monitors.has(cameraName)) {
           window.monitorManager.addMonitor({
-              id: cameraName,
-              name: cameraName,
-              url: cameraUrl,
-              width: 320,
-              height: 180
+               id: cameraName,
+               name: cameraName,
+               url: cameraUrl,
+               width: 320,
+               height: 180
           });
      }
      
      if (action === 'show_camera') {
           if (window.monitorManager) {
-              window.monitorManager.showMonitor(cameraName);
-              addMessage('system', `[CAMERA] Showed camera: ${cameraName}`);
+               window.monitorManager.showMonitor(cameraName);
+               addMessage('system', `[CAMERA] Showed camera: ${cameraName}`);
           }
      } else if (action === 'hide_camera') {
           if (window.monitorManager) {
-              window.monitorManager.hideMonitor(cameraName);
-              addMessage('system', `[CAMERA] Hidden camera: ${cameraName}`);
+               window.monitorManager.hideMonitor(cameraName);
+               addMessage('system', `[CAMERA] Hidden camera: ${cameraName}`);
           }
      } else if (action === 'zoom_camera') {
           if (window.monitorManager) {
-              window.monitorManager.showMonitor(cameraName);
-              if (window.monitor3D && window.monitorManager.videoElements.has(cameraName)) {
-                  const videoElement = window.monitorManager.videoElements.get(cameraName);
-                  window.monitor3D.showMonitorIn3D(
-                      cameraName,
-                      videoElement,
-                      window.monitorController?.currentLayout || 'ring',
-                      0
-                  );
-              }
-              addMessage('system', `[CAMERA] Zoomed camera: ${cameraName}`);
+               // 显示监控面板
+               window.monitorManager.showMonitor(cameraName);
+               
+               // 根据 zoom_level 设置放大级别（使用 CSS 全屏，不需要用户手势）
+               window.monitorManager.setZoomLevel(cameraName, zoomLevel);
+               
+               // 对于 large/medium 级别，在 3D 场景中显示
+               if ((zoomLevel === 'large' || zoomLevel === 'medium') && 
+                   window.monitor3D && window.monitorManager.videoElements.has(cameraName)) {
+                   const videoElement = window.monitorManager.videoElements.get(cameraName);
+                   window.monitor3D.showMonitorIn3D(
+                       cameraName,
+                       videoElement,
+                       window.monitorController?.currentLayout || 'ring',
+                       0
+                   );
+               }
+               addMessage('system', `[CAMERA] Zoomed camera: ${cameraName} (${zoomLevel})`);
           }
      }
- }
+}
 
 /**
  * 处理多摄像头操作
@@ -568,7 +576,17 @@ function animate() {
         sphere.rotation.y += (mouseX - sphere.rotation.y) * 0.05;
     }
 
-    renderer.render(scene, camera);
+    try {
+        renderer.render(scene, camera);
+    } catch (error) {
+        // Handle CORS and other rendering errors gracefully
+        if (error.message.includes('SecurityError') || error.message.includes('cross-origin')) {
+            console.warn('[CORS] Video texture CORS issue detected, rendering without 3D video:', error);
+            // Disable 3D video textures for this frame
+        } else {
+            console.error('[Render] WebGL rendering error:', error);
+        }
+    }
 }
 
 
