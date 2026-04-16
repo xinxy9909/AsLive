@@ -114,13 +114,15 @@ async function startRecording() {
         mediaRecorder.onstop = async () => {
             // 停止麦克风流的所有轨道
             stream.getTracks().forEach(track => track.stop());
-            
+
+            await interruptCurrent(); // 打断当前回复
+
             const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
             setStatus('UPLOADING...', 'busy');
-            
+
             const formData = new FormData();
             formData.append('audio', audioBlob, 'recording.wav');
-            
+
             try {
                 const response = await fetch('/audio', {
                     method: 'POST',
@@ -130,7 +132,6 @@ async function startRecording() {
             } catch (e) {
                 console.error(e);
                 setStatus('ERROR', 'busy');
-                // 如果出错且在持续模式，过会儿重试？或者直接报错
             }
         };
         
@@ -168,6 +169,31 @@ let audioQueue = [];
 let isPlaying = false;
 let currentAudioSource = null; // 用于 WebAudio 连接
 
+// 当前 SSE 流的 reader，用于打断
+let currentReader = null;
+
+// 代次计数器：每次打断递增，旧 handleStream 检测到不匹配后不再推送音频
+let streamGeneration = 0;
+
+// 打断当前回复：取消 SSE 流、清空音频队列、停止播放
+async function interruptCurrent() {
+    // ⚠️ 全部同步操作必须在 await 之前完成。
+    // await reader.cancel() 会让出事件循环，旧 handleStream 可能趁机推送音频。
+    streamGeneration++;   // 递增代次，旧 handleStream 的推送全部作废
+    audioQueue = [];
+    isPlaying = false;
+    audioPlayer.pause();
+    audioPlayer.currentTime = 0;
+    audioPlayer.removeAttribute('src');
+    audioPlayer.load();
+
+    // SSE 流取消是异步操作，放在最后
+    if (currentReader) {
+        try { await currentReader.cancel(); } catch (_) {}
+        currentReader = null;
+    }
+}
+
 // 状态更新
 function setStatus(status, type = 'normal') {
     statusDisplay.textContent = status;
@@ -175,29 +201,14 @@ function setStatus(status, type = 'normal') {
     dot.className = 'status-dot ' + (type === 'busy' ? 'busy' : 'healthy');
 }
 
-// 消息展示
+// 消息展示（仅用于用户消息和带初始内容的消息）
 function addMessage(role, content) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
-    
-    // 如果是流式更新（仅助手）
-    if (role === 'assistant' && document.querySelector('.message.assistant.typing')) {
-        const typingMsg = document.querySelector('.message.assistant.typing');
-        const contentDiv = typingMsg.querySelector('.message-content');
-        contentDiv.textContent += content;
-        chatHistory.scrollTop = chatHistory.scrollHeight;
-        return typingMsg;
-    }
-
     div.innerHTML = `
         <div class="role-label">${role === 'user' ? 'USER' : 'AI CORE'}</div>
         <div class="message-content">${content}</div>
     `;
-    
-    if (role === 'assistant' && !content) {
-        div.classList.add('typing'); // 标记为正在输入
-    }
-    
     chatHistory.appendChild(div);
     chatHistory.scrollTop = chatHistory.scrollHeight;
     return div;
@@ -256,40 +267,59 @@ async function playNextAudio() {
 // 处理 SSE 流
 async function handleStream(response) {
     const reader = response.body.getReader();
+    currentReader = reader;
+    const myGen = streamGeneration; // 捕获本次代次
     const decoder = new TextDecoder();
-    
-    let assistantMsgEl = addMessage('assistant', ''); // 创建空的助手消息
-    
+
+    // 每次 handleStream 直接创建独立的消息元素，
+    // 不依赖任何 DOM 全局状态，彻底杜绝消息混合。
+    const assistantMsgEl = document.createElement('div');
+    assistantMsgEl.className = 'message assistant';
+    assistantMsgEl.innerHTML = `
+        <div class="role-label">AI CORE</div>
+        <div class="message-content"></div>
+    `;
+    chatHistory.appendChild(assistantMsgEl);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+
     while (true) {
-        const { done, value } = await reader.read();
+        let done, value;
+        try {
+            ({ done, value } = await reader.read());
+        } catch (_) {
+            break; // reader 被取消（打断）
+        }
         if (done) break;
-        
+
+        // 代次不匹配说明已被打断，立即停止处理
+        if (myGen !== streamGeneration) break;
+
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n\n');
-        
+
         for (const line of lines) {
             if (line.startsWith('data: ')) {
                 try {
                     const data = JSON.parse(line.slice(6));
-                    
+
                     if (data.type === 'start') {
                         setStatus('PROCESSING...', 'busy');
                     } else if (data.type === 'text') {
-                        // 更新文本显示
                         const contentDiv = assistantMsgEl.querySelector('.message-content');
                         contentDiv.textContent += data.content;
                         chatHistory.scrollTop = chatHistory.scrollHeight;
                     } else if (data.type === 'audio') {
-                        // 添加到播放队列
-                        audioQueue.push(data);
-                        if (!isPlaying) {
-                            playNextAudio();
+                        // 代次匹配才推送音频，防止旧流在 await 间隙塞入过期音频
+                        if (myGen === streamGeneration) {
+                            audioQueue.push(data);
+                            if (!isPlaying) {
+                                playNextAudio();
+                            }
                         }
                     } else if (data.type === 'asr') {
-                        // 显示识别到的用户文本
                         addMessage('user', data.text);
                     } else if (data.type === 'end') {
-                        assistantMsgEl.classList.remove('typing');
+                        // 流结束，无需额外处理
                     }
                 } catch (e) {
                     console.error('Parse error:', e);
@@ -297,24 +327,27 @@ async function handleStream(response) {
             }
         }
     }
+    if (currentReader === reader) currentReader = null;
 }
 
 // 发送文本
 async function sendText() {
     const text = textInput.value.trim();
     if (!text) return;
-    
+
+    await interruptCurrent(); // 打断当前回复
+
     textInput.value = '';
     addMessage('user', text);
     setStatus('THINKING...', 'busy');
-    
+
     try {
         const response = await fetch('/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: text })
         });
-        
+
         handleStream(response);
     } catch (e) {
         console.error(e);

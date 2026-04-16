@@ -39,7 +39,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 # 全局模型实例（懒加载）
-_models = {
+models = {
     "asr": None,
     "llm": None,
     "tts": None,
@@ -49,21 +49,24 @@ _models = {
 # 对话历史
 conversation_history = []
 
+# 打断机制：每次新请求递增，旧流检测到不一致后自动退出
+current_gen: int = 0
+
 # 句子分隔符
 SENTENCE_DELIMITERS = set(',，。！？；.!?;\n')
 
 
 def get_models():
     """懒加载模型"""
-    if not _models["initialized"]:
+    if not models["initialized"]:
         print("正在初始化模型...")
         # 现在 Wrapper 会自动使用 config.py 中的默认值
-        _models["asr"] = ASRWrapper()
-        _models["llm"] = LLMWrapper()
-        _models["tts"] = TTSWrapper()
-        _models["initialized"] = True
+        models["asr"] = ASRWrapper()
+        models["llm"] = LLMWrapper()
+        models["tts"] = TTSWrapper()
+        models["initialized"] = True
         print("模型初始化完成！")
-    return _models["asr"], _models["llm"], _models["tts"]
+    return models["asr"], models["llm"], models["tts"]
 
 
 class ChatRequest(BaseModel):
@@ -93,7 +96,8 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
     通过 SSE 返回文本和音频 URL
     """
     global conversation_history
-    
+    my_gen = current_gen  # 记录本次请求的代次，用于打断检测
+
     asr, llm, tts = get_models()
     
     # 添加用户消息到历史
@@ -129,11 +133,15 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
 
     # 流式生成
     for chunk in llm.inference_stream_chat(context_messages):
+        # 打断检测：新请求已到来，立即停止当前流
+        if current_gen != my_gen:
+            return
+
         full_response += chunk
-        
+
         # 发送文本片段
         yield f"data: {json.dumps({'type': 'text', 'content': chunk})}\n\n"
-        
+
         # 处理 <think> 标签
         if '<think>' in chunk:
             in_think_tag = True
@@ -141,19 +149,19 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
             if before_think:
                 buffer += before_think
             continue
-        
+
         if '</think>' in chunk:
             in_think_tag = False
             after_think = chunk.split('</think>')[-1]
             if after_think:
                 buffer += after_think
             continue
-            
+
         if in_think_tag:
             continue
-            
+
         buffer += chunk
-        
+
         # 检测句子边界
         while True:
             delimiter_pos = -1
@@ -161,14 +169,18 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
                 if char in SENTENCE_DELIMITERS:
                     delimiter_pos = i
                     break
-            
+
             if delimiter_pos == -1:
                 break
-            
+
             # 提取句子
             sentence = buffer[:delimiter_pos + 1]
             buffer = buffer[delimiter_pos + 1:]
-            
+
+            # 打断检测：TTS 合成前再检查一次
+            if current_gen != my_gen:
+                return
+
             # 清理并合成 TTS
             clean_text = clean_text_for_tts(sentence)
             if clean_text:
@@ -176,7 +188,7 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
                 if audio_filename:
                     yield f"data: {json.dumps({'type': 'audio', 'url': f'/outputs/{audio_filename}', 'text': clean_text})}\n\n"
                     audio_index += 1
-        
+
         # 让出控制权
         await asyncio.sleep(0)
     
@@ -205,6 +217,8 @@ async def index():
 @app.post("/chat")
 async def chat(request: ChatRequest):
     """文本聊天接口，返回 SSE 流"""
+    global current_gen
+    current_gen += 1  # 打断当前正在进行的流
     print(f"收到文本请求: {request.text}")
     return StreamingResponse(
         process_streaming(request.text, request.speak_id, request.speed),
@@ -223,6 +237,8 @@ async def audio_chat(
     speed: float = 1.0
 ):
     """语音聊天接口"""
+    global current_gen
+    current_gen += 1  # 打断当前正在进行的流
     asr, llm, tts = get_models()
 
     uid = uuid.uuid4().hex

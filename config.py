@@ -24,6 +24,13 @@ TTS_VOICE_MAP = {
     "zm_002": "longjiangshan",
 }
 
+# Labillion AI-Native 配置
+# LABILLION_BASE_URL      = https://staging.automation.labillion.cn
+# LABILLION_PLATFORM_ID   = <平台ID>
+# LABILLION_USERNAME      = <用户名>
+# LABILLION_PASSWORD      = <密码>
+# LABILLION_TENANT_ID     = <租户UUID>
+
 # 其他配置
 OUTPUT_DIR = BASE_DIR / "outputs"
 STATIC_DIR = BASE_DIR / "static"
