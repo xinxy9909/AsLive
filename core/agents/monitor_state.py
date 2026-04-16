@@ -88,7 +88,7 @@ class MonitorState:
                     name=camera_config["name"],
                     platform=platform,
                     url=camera_config["url"],
-                    visible=True,
+                    visible=False,  # 默认关闭（隐藏）摄像头
                     status=CameraStatus.ONLINE
                 )
                 self.cameras[camera_config["name"]] = camera
