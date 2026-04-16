@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  mega-live-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mega-live-api
+    ports:
+      - "18024:8000"
+    environment:
+      # LLM 配置
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-qwen-plus}
+      
+      # Monitor Agent 配置
+      - MONITOR_MODEL_NAME=${MONITOR_MODEL_NAME:-qwen-plus}
+      
+      # ASR 配置
+      - ASR_MODEL_NAME=${ASR_MODEL_NAME:-paraformer-realtime-v2}
+      
+      # TTS 配置
+      - TTS_MODEL_NAME=${TTS_MODEL_NAME:-cosyvoice-v1}
+      - TTS_VOICE=${TTS_VOICE:-longxiaochun}
+      
+      # Python 设置
+      - PYTHONUNBUFFERED=1
+      
+    volumes:
+      # 挂载输出目录
+      - ./outputs:/app/outputs
+      # 可选：挂载静态文件目录以便实时修改
+      - ./static:/app/static
+      # 可选：挂载日志目录
+      - ./logs:/app/logs
+      -
+    networks:
+      - mega_net
+    # 自动重启策略
+    restart: unless-stopped
+
+networks:
+  mega_net:
+    external: true
