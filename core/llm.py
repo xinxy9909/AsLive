@@ -1,193 +1,205 @@
-"""LLM wrapper — Labillion AI-Native 后端（SSE 流式）。"""
+"""
+LLM 包装器 - 意图识别和 Agent 路由
+"""
 
-import base64
-import json
 import logging
 import os
-import time
 import uuid
-from datetime import datetime, timezone, timedelta
 
-import requests
+from core.agents import AINetiveAgent, OrganoidAgent
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# 配置：通过环境变量设置
-# ---------------------------------------------------------------------------
-BASE_URL = os.getenv("LABILLION_BASE_URL", "https://staging.automation.labillion.cn")
-PLATFORM_ID = os.getenv("LABILLION_PLATFORM_ID", "")
-USERNAME = os.getenv("LABILLION_USERNAME", "")
-PASSWORD = os.getenv("LABILLION_PASSWORD", "")
-TENANT_ID_RAW = os.getenv("LABILLION_TENANT_ID", "")
-TENANT_ID = int("".join(c for c in TENANT_ID_RAW if c.isdigit())) if TENANT_ID_RAW else 0
+
+# Agent 类型枚举
+class AgentType:
+    """Agent 类型常量"""
+    AI_NATIVE = "ai-native"
+    ORGANOID = "organoid"
 
 
-# ---------------------------------------------------------------------------
-# Token 管理器
-# ---------------------------------------------------------------------------
-class TokenManager:
-    """SAAS 登录 Token 管理器：自动获取、缓存、刷新。"""
+# 配置
+DEFAULT_AGENT = os.getenv("DEFAULT_AGENT", AgentType.AI_NATIVE)
 
-    EXPIRY_BUFFER_SECONDS = 300  # 提前 5 分钟刷新
+# Agent 实例缓存
+_agents = {
+    AgentType.AI_NATIVE: AINetiveAgent(),
+    AgentType.ORGANOID: OrganoidAgent(),
+}
 
-    def __init__(self) -> None:
-        self.access_token: str | None = None
-        self.expires_at: float = 0.0
 
-    def get_token(self) -> str:
-        """获取有效 token，过期时自动重新登录。"""
-        if self.access_token and time.time() < self.expires_at:
-            return self.access_token
-        self.do_login()
-        return self.access_token  # type: ignore[return-value]
-
-    def do_login(self) -> None:
-        """调用 SAAS 登录接口获取 token。"""
-        url = f"{BASE_URL}/api/identity/v1/auth/login"
-        payload = {
-            "tenantId": TENANT_ID,
-            "userName": USERNAME,
-            "password": PASSWORD,
-        }
-        resp = requests.post(url, json=payload, timeout=30)
-        resp.raise_for_status()
-        result = resp.json()
-        token = result.get("data")
-        if not token:
-            raise RuntimeError(f"Labillion 登录失败: {result.get('message', '未知错误')}")
-        self.access_token = token
-        self.expires_at = self.parse_expiry(token)
-        logger.info("Labillion 登录成功，token 已更新")
-
-    def parse_expiry(self, token: str) -> float:
-        """从 JWT payload 解析 exp，返回带缓冲的过期时间戳。"""
+class IntentClassifier:
+    """
+    意图识别器 - 使用 LLM 识别用户意图并选择合适的 Agent
+    """
+    
+    # 意图描述
+    INTENT_DESCRIPTIONS = {
+        AgentType.ORGANOID: "多模态推理 - 用户的问题需要进行深度推理和多步骤分析",
+        AgentType.AI_NATIVE: "通用对话 - 一般性聊天、日常对话和简单问答",
+    }
+    
+    def classify(self, text: str) -> str:
+        """
+        使用 LLM 识别用户输入的意图，并返回最适合的 Agent 类型。
+        
+        Args:
+            text: 用户输入的文本
+            
+        Returns:
+            选择的 Agent 类型
+        """
+        if not text or not isinstance(text, str):
+            logger.warning("Invalid input text for intent classification")
+            return DEFAULT_AGENT
+        
         try:
-            payload_b64 = token.split(".")[1]
-            payload_b64 += "=" * (4 - len(payload_b64) % 4)
-            payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-            return payload.get("exp", 0) - self.EXPIRY_BUFFER_SECONDS
-        except Exception:
-            return time.time() + 3600 - self.EXPIRY_BUFFER_SECONDS
+            # 构建意图识别的 prompt
+            agent_options = "\n".join([
+                f"- {agent_type}: {desc}" 
+                for agent_type, desc in self.INTENT_DESCRIPTIONS.items()
+            ])
+            
+            prompt = f"""请分析用户的这个问题，判断最适合用哪种Agent来处理。
+
+可选的Agent类型：
+{agent_options}
+
+用户问题："{text}"
+
+请只返回一个Agent的名称（ai-native 或 organoid），不要返回其他内容。"""
+            
+            # 使用 AI-Native Agent 进行意图识别
+            ai_native = _agents[AgentType.AI_NATIVE]
+            messages = [{"role": "user", "content": prompt}]
+            
+            result = ""
+            for chunk in ai_native.inference_stream(messages):
+                result += chunk
+            
+            result = result.strip().lower()
+            logger.info(f"Intent classification result: {result}")
+            
+            # 解析结果，匹配 Agent 类型
+            if "organoid" in result:
+                logger.info(f"Selected agent: organoid for query: {text[:50]}...")
+                return AgentType.ORGANOID
+            elif "ai-native" in result or "ai native" in result:
+                logger.info(f"Selected agent: ai-native for query: {text[:50]}...")
+                return AgentType.AI_NATIVE
+            
+            # 如果解析失败，使用默认 Agent
+            logger.warning(f"Failed to parse intent result: {result}, using default agent")
+            return DEFAULT_AGENT
+            
+        except Exception as e:
+            logger.error(f"Error in intent classification: {e}, using default agent")
+            return DEFAULT_AGENT
 
 
-token_manager = TokenManager()
+# 全局意图分类器
+_intent_classifier = IntentClassifier()
 
 
-# ---------------------------------------------------------------------------
-# 请求头工具
-# ---------------------------------------------------------------------------
-def base_headers() -> dict[str, str]:
-    """构造公共请求头。"""
-    token = token_manager.get_token()
-    return {
-        "accept-language": "zh-CN",
-        "content-type": "application/json",
-        "autobio-auth": token,
-        "authorization": token,
-        "platform": PLATFORM_ID,
-    }
-
-
-# ---------------------------------------------------------------------------
-# AI-Native API 调用
-# ---------------------------------------------------------------------------
-def create_thread(thread_id: str, query: str) -> None:
-    """创建对话线程。"""
-    url = f"{BASE_URL}/api/ai-native-backend/v1/thread/create"
-    headers = {**base_headers(), "accept": "application/json, text/plain, */*"}
-    requests.post(url, headers=headers, json={"query": query, "thread_id": thread_id}, timeout=30).raise_for_status()
-
-
-def stream_generate(thread_id: str, messages: list[dict]) -> requests.Response:
-    """发起聊天请求，返回 SSE 流式响应。"""
-    url = f"{BASE_URL}/api/ai-native-backend/v1/generate"
-    headers = {
-        **base_headers(),
-        "accept": "text/event-stream, text/event-stream",
-        "access-control-allow-origin": "*",
-        "cache-control": "no-transform",
-        "x-accel-buffering": "no",
-    }
-    payload = {
-        "thread_id": thread_id,
-        "messages": messages,
-        "retry_to": 0,
-        "files": [],
-    }
-    resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=60)
-    resp.raise_for_status()
-    return resp
-
-
-def parse_sse(response: requests.Response):
-    """解析 SSE 响应流，逐块 yield 文本内容。"""
-    for raw_line in response.iter_lines(decode_unicode=True):
-        if not raw_line or not raw_line.startswith("data:"):
-            continue
-        data_str = raw_line[len("data:"):].strip()
-        if data_str == "[DONE]":
-            break
-        try:
-            event = json.loads(data_str)
-            content = (
-                event.get("content")
-                or (event.get("delta") or {}).get("content")
-                or ((event.get("choices") or [{}])[0].get("delta") or {}).get("content")
-                or ""
-            )
-            if content:
-                yield content
-        except json.JSONDecodeError:
-            if data_str:
-                yield data_str
-
-
-def make_messages(role_content_pairs: list[dict]) -> list[dict]:
-    """将 {role, content} 列表转换为 AI-Native 消息格式。"""
-    now = datetime.now(timezone(timedelta(hours=8))).isoformat()
-    return [
-        {
-            "id": str(uuid.uuid4()),
-            "role": msg["role"],
-            "content": msg["content"],
-            "creationTime": now,
-            "files": [],
-            "retryTo": 0,
-        }
-        for msg in role_content_pairs
-    ]
-
-
-# ---------------------------------------------------------------------------
-# LLMWrapper 公共接口
-# ---------------------------------------------------------------------------
 class LLMWrapper:
-    def __init__(self):
-        print("正在初始化LLM (Labillion AI-Native)...")
+    """
+    LLM 包装器 - 支持意图识别和多 Agent 路由
+    """
+    
+    def __init__(self, enable_intent_classification: bool = True):
+        """
+        初始化 LLMWrapper。
+        
+        Args:
+            enable_intent_classification: 是否启用意图识别来自动选择 Agent
+        """
+        print("正在初始化LLM (支持意图识别 + 多 Agent 路由)...")
+        self.enable_intent_classification = enable_intent_classification
+        self.current_agent = DEFAULT_AGENT
+        print(f"默认 Agent: {DEFAULT_AGENT}")
         print("LLM初始化完成！")
-
-    def inference(self, text, max_new_tokens=500) -> str:
+    
+    def select_agent(self, text: str) -> str:
+        """
+        根据用户输入选择最适合的 Agent。
+        
+        Args:
+            text: 用户输入文本
+            
+        Returns:
+            选择的 Agent 类型
+        """
+        if not self.enable_intent_classification:
+            return DEFAULT_AGENT
+        
+        selected = _intent_classifier.classify(text)
+        self.current_agent = selected
+        return selected
+    
+    def inference(self, text: str, max_new_tokens: int = 500) -> str:
+        """
+        同步推理接口（完整结果）。
+        
+        Args:
+            text: 输入文本
+            max_new_tokens: 最大生成token数（未使用，保留以兼容旧接口）
+            
+        Returns:
+            生成的文本
+        """
         return "".join(self.inference_stream(text, max_new_tokens))
-
-    def inference_stream(self, text, max_new_tokens=500):
-        thread_id = str(uuid.uuid4())
-        messages = make_messages([{"role": "user", "content": text}])
-        create_thread(thread_id, text)
-        resp = stream_generate(thread_id, messages)
-        try:
-            yield from parse_sse(resp)
-        finally:
-            resp.close()
-
-    def inference_stream_chat(self, messages: list, max_new_tokens=500):
-        thread_id = str(uuid.uuid4())
-        built = make_messages(messages)
+    
+    def inference_stream(self, text: str, max_new_tokens: int = 500):
+        """
+        流式推理接口（单轮对话）。
+        
+        Args:
+            text: 输入文本
+            max_new_tokens: 最大生成token数（未使用，保留以兼容旧接口）
+            
+        Yields:
+            推理结果流
+        """
+        # 选择 Agent
+        agent_type = self.select_agent(text)
+        logger.info(f"Processing with agent: {agent_type}")
+        
+        # 获取 Agent 实例
+        agent = _agents.get(agent_type, _agents[AgentType.AI_NATIVE])
+        
+        # 构建消息
+        messages = [{"role": "user", "content": text}]
+        
+        # 执行推理
+        yield from agent.inference_stream(messages)
+    
+    def inference_stream_chat(self, messages: list, max_new_tokens: int = 500, 
+                             use_intent_classification: bool = True):
+        """
+        流式推理接口（多轮对话）。
+        
+        Args:
+            messages: 消息列表
+            max_new_tokens: 最大生成token数（未使用，保留以兼容旧接口）
+            use_intent_classification: 是否对最后一条用户消息进行意图识别
+            
+        Yields:
+            推理结果流
+        """
+        # 获取最后一条用户消息用于意图识别
         user_msgs = [m for m in messages if m.get("role") == "user"]
         query = user_msgs[-1]["content"] if user_msgs else ""
-        create_thread(thread_id, query)
-        resp = stream_generate(thread_id, built)
-        try:
-            yield from parse_sse(resp)
-        finally:
-            resp.close()
+        
+        # 根据是否启用意图识别来选择 Agent
+        if use_intent_classification and self.enable_intent_classification:
+            agent_type = self.select_agent(query)
+        else:
+            agent_type = DEFAULT_AGENT
+        
+        logger.info(f"Processing chat with agent: {agent_type}")
+        
+        # 获取 Agent 实例
+        agent = _agents.get(agent_type, _agents[AgentType.AI_NATIVE])
+        
+        # 执行推理
+        yield from agent.inference_stream(messages)
