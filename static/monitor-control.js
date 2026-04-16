@@ -165,19 +165,12 @@ class MonitorController {
         this.addMessage('3D monitors hidden');
     }
     
-    /**
-     * 添加系统消息到聊天历史
-     * @param {string} message 
-     */
+     /**
+      * 添加日志消息（仅输出到 console）
+      * @param {string} message 
+      */
     addMessage(message) {
-        const chatHistory = document.getElementById('chat-history');
-        if (!chatHistory) return;
-        
-        const messageEl = document.createElement('div');
-        messageEl.className = 'message system';
-        messageEl.innerHTML = `<div class="message-content">[MONITOR] ${message}</div>`;
-        chatHistory.appendChild(messageEl);
-        chatHistory.scrollTop = chatHistory.scrollHeight;
+        console.log(`[MONITOR] ${message}`);
     }
     
     /**

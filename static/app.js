@@ -190,10 +190,36 @@ function setStatus(status, type = 'normal') {
 function addMessage(role, content) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
+    
+    // 使用 marked 将 Markdown 转换为 HTML
+    let htmlContent = content;
+    try {
+        // 配置 marked 选项
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                breaks: true,
+                gfm: true
+            });
+            htmlContent = marked.parse(content);
+        }
+    } catch (e) {
+        console.warn('Markdown parsing error:', e);
+        // 如果解析失败，使用原始内容
+        htmlContent = content;
+    }
+    
     div.innerHTML = `
         <div class="role-label">${role === 'user' ? 'USER' : 'AI CORE'}</div>
-        <div class="message-content">${content}</div>
+        <div class="message-content markdown">${htmlContent}</div>
     `;
+    
+    // 应用代码高亮
+    div.querySelectorAll('pre code').forEach((block) => {
+        if (typeof hljs !== 'undefined') {
+            hljs.highlightElement(block);
+        }
+    });
+    
     chatHistory.appendChild(div);
     chatHistory.scrollTop = chatHistory.scrollHeight;
     return div;
@@ -255,62 +281,134 @@ async function handleStream(response) {
      const myGen = streamGeneration;
      const decoder = new TextDecoder();
   
-     const assistantMsgEl = document.createElement('div');
-     assistantMsgEl.className = 'message assistant';
-     assistantMsgEl.innerHTML = `
-         <div class="role-label">AI CORE</div>
-         <div class="message-content"></div>
-     `;
-     chatHistory.appendChild(assistantMsgEl);
-     chatHistory.scrollTop = chatHistory.scrollHeight;
-  
-     while (true) {
-         let done, value;
-         try {
-              ({ done, value } = await reader.read());
-         } catch (_) {
-              break;
-         }
-         if (done) break;
-  
-         if (myGen !== streamGeneration) break;
-  
-         const chunk = decoder.decode(value);
-         const lines = chunk.split('\n\n');
-  
-         for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                  try {
-                      const data = JSON.parse(line.slice(6));
-  
-                      if (data.type === 'start') {
-                          setStatus('PROCESSING...', 'busy');
-                      } else if (data.type === 'text') {
-                          const contentDiv = assistantMsgEl.querySelector('.message-content');
-                          contentDiv.textContent += data.content;
-                          chatHistory.scrollTop = chatHistory.scrollHeight;
-                      } else if (data.type === 'audio') {
-                          if (myGen === streamGeneration) {
-                              audioQueue.push(data);
-                              if (!isPlaying) {
-                                  playNextAudio();
-                              }
-                          }
-                      } else if (data.type === 'asr') {
-                          addMessage('user', data.text);
-                      } else if (data.type === 'tool_action') {
-                          handleToolAction(data);
-                      } else if (data.type === 'end') {
-                          // 流结束
-                      }
-                  } catch (e) {
-                      console.error('Parse error:', e);
-                  }
-              }
-         }
-     }
-     if (currentReader === reader) currentReader = null;
- }
+      const assistantMsgEl = document.createElement('div');
+      assistantMsgEl.className = 'message assistant';
+      assistantMsgEl.innerHTML = `
+          <div class="role-label">AI CORE</div>
+          <div class="message-content markdown"></div>
+      `;
+      chatHistory.appendChild(assistantMsgEl);
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+      
+       // 存储完整的消息文本，用于实时 Markdown 渲染
+       let fullMessage = '';
+       const contentDiv = assistantMsgEl.querySelector('.message-content');
+       let hasContent = false;  // 标记是否收到了任何内容
+       let renderTimeout; // 用于防抖渲染
+       
+       // 实时渲染 Markdown 的辅助函数（带防抖）
+       function renderMarkdownIncremental() {
+           if (renderTimeout) clearTimeout(renderTimeout);
+           renderTimeout = setTimeout(() => {
+               if (!fullMessage) return;
+               try {
+                   if (typeof marked !== 'undefined') {
+                       marked.setOptions({
+                           breaks: true,
+                           gfm: true
+                       });
+                       const htmlContent = marked.parse(fullMessage);
+                       contentDiv.innerHTML = htmlContent;
+                       
+                       // 应用代码高亮
+                       contentDiv.querySelectorAll('pre code').forEach((block) => {
+                           try {
+                               if (typeof hljs !== 'undefined') {
+                                   hljs.highlightElement(block);
+                               }
+                           } catch (highlightError) {
+                               console.warn('Code highlight error:', highlightError);
+                           }
+                       });
+                   } else {
+                       contentDiv.textContent = fullMessage;
+                   }
+               } catch (e) {
+                   console.warn('Markdown rendering error:', e);
+                   contentDiv.textContent = fullMessage;
+               }
+               chatHistory.scrollTop = chatHistory.scrollHeight;
+           }, 100); // 100ms 防抖延迟
+       }
+    
+       while (true) {
+           let done, value;
+           try {
+                ({ done, value } = await reader.read());
+           } catch (_) {
+                break;
+           }
+           if (done) break;
+    
+           if (myGen !== streamGeneration) break;
+    
+           const chunk = decoder.decode(value);
+           const lines = chunk.split('\n\n');
+    
+           for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+    
+                        if (data.type === 'start') {
+                            setStatus('PROCESSING...', 'busy');
+                        } else if (data.type === 'text') {
+                            fullMessage += data.content;
+                            hasContent = true;
+                            // 实时增量渲染 Markdown
+                            renderMarkdownIncremental();
+                        } else if (data.type === 'audio') {
+                            if (myGen === streamGeneration) {
+                                audioQueue.push(data);
+                                if (!isPlaying) {
+                                    playNextAudio();
+                                }
+                            }
+                        } else if (data.type === 'asr') {
+                            addMessage('user', data.text);
+                        } else if (data.type === 'tool_action') {
+                            handleToolAction(data);
+                        } else if (data.type === 'end') {
+                            // 流结束，确保最后一次渲染完成
+                            if (renderTimeout) clearTimeout(renderTimeout);
+                            if (hasContent && fullMessage) {
+                                try {
+                                    if (typeof marked !== 'undefined') {
+                                        marked.setOptions({
+                                            breaks: true,
+                                            gfm: true
+                                        });
+                                        const htmlContent = marked.parse(fullMessage);
+                                        contentDiv.innerHTML = htmlContent;
+                                        
+                                        // 应用代码高亮
+                                        contentDiv.querySelectorAll('pre code').forEach((block) => {
+                                            try {
+                                                if (typeof hljs !== 'undefined') {
+                                                    hljs.highlightElement(block);
+                                                }
+                                            } catch (highlightError) {
+                                                console.warn('Code highlight error:', highlightError);
+                                            }
+                                        });
+                                    } else {
+                                        console.warn('marked library not loaded, using plain text');
+                                        contentDiv.textContent = fullMessage;
+                                    }
+                                } catch (e) {
+                                    console.warn('Markdown rendering error:', e);
+                                    contentDiv.textContent = fullMessage;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Parse error:', e);
+                    }
+                }
+           }
+       }
+       if (currentReader === reader) currentReader = null;
+  }
 
 /**
  * 处理工具动作事件 - 更新前端UI
@@ -355,38 +453,38 @@ function handleSingleCameraAction(action, cameraData) {
           });
      }
      
-     if (action === 'show_camera') {
-          if (window.monitorManager) {
-               window.monitorManager.showMonitor(cameraName);
-               addMessage('system', `[CAMERA] Showed camera: ${cameraName}`);
-          }
-     } else if (action === 'hide_camera') {
-          if (window.monitorManager) {
-               window.monitorManager.hideMonitor(cameraName);
-               addMessage('system', `[CAMERA] Hidden camera: ${cameraName}`);
-          }
-     } else if (action === 'zoom_camera') {
-          if (window.monitorManager) {
-               // 显示监控面板
-               window.monitorManager.showMonitor(cameraName);
-               
-               // 根据 zoom_level 设置放大级别（使用 CSS 全屏，不需要用户手势）
-               window.monitorManager.setZoomLevel(cameraName, zoomLevel);
-               
-               // 对于 large/medium 级别，在 3D 场景中显示
-               if ((zoomLevel === 'large' || zoomLevel === 'medium') && 
-                   window.monitor3D && window.monitorManager.videoElements.has(cameraName)) {
-                   const videoElement = window.monitorManager.videoElements.get(cameraName);
-                   window.monitor3D.showMonitorIn3D(
-                       cameraName,
-                       videoElement,
-                       window.monitorController?.currentLayout || 'ring',
-                       0
-                   );
-               }
-               addMessage('system', `[CAMERA] Zoomed camera: ${cameraName} (${zoomLevel})`);
-          }
-     }
+      if (action === 'show_camera') {
+           if (window.monitorManager) {
+                window.monitorManager.showMonitor(cameraName);
+                console.log(`[CAMERA] Showed camera: ${cameraName}`);
+           }
+      } else if (action === 'hide_camera') {
+           if (window.monitorManager) {
+                window.monitorManager.hideMonitor(cameraName);
+                console.log(`[CAMERA] Hidden camera: ${cameraName}`);
+           }
+      } else if (action === 'zoom_camera') {
+           if (window.monitorManager) {
+                // 显示监控面板
+                window.monitorManager.showMonitor(cameraName);
+                
+                // 根据 zoom_level 设置放大级别（使用 CSS 全屏，不需要用户手势）
+                window.monitorManager.setZoomLevel(cameraName, zoomLevel);
+                
+                // 对于 large/medium 级别，在 3D 场景中显示
+                if ((zoomLevel === 'large' || zoomLevel === 'medium') && 
+                    window.monitor3D && window.monitorManager.videoElements.has(cameraName)) {
+                    const videoElement = window.monitorManager.videoElements.get(cameraName);
+                    window.monitor3D.showMonitorIn3D(
+                        cameraName,
+                        videoElement,
+                        window.monitorController?.currentLayout || 'ring',
+                        0
+                    );
+                }
+                console.log(`[CAMERA] Zoomed camera: ${cameraName} (${zoomLevel})`);
+           }
+      }
 }
 
 /**
@@ -398,25 +496,25 @@ function handleMultipleCamerasAction(action, camerasData) {
           return;
      }
      
-     camerasData.forEach(cameraData => {
-          if (window.monitorManager && !window.monitorManager.monitors.has(cameraData.camera_name)) {
-              window.monitorManager.addMonitor({
-                  id: cameraData.camera_name,
-                  name: cameraData.camera_name,
-                  url: cameraData.url,
-                  width: 320,
-                  height: 180
-              });
-          }
-          
-          if (action === 'show' && window.monitorManager) {
-              window.monitorManager.showMonitor(cameraData.camera_name);
-          } else if (action === 'hide' && window.monitorManager) {
-              window.monitorManager.hideMonitor(cameraData.camera_name);
-          }
-     });
-     
-     addMessage('system', `[CAMERA] ${action === 'show' ? 'Showed' : 'Hidden'} ${camerasData.length} camera(s)`);
+      camerasData.forEach(cameraData => {
+           if (window.monitorManager && !window.monitorManager.monitors.has(cameraData.camera_name)) {
+               window.monitorManager.addMonitor({
+                   id: cameraData.camera_name,
+                   name: cameraData.camera_name,
+                   url: cameraData.url,
+                   width: 320,
+                   height: 180
+               });
+           }
+           
+           if (action === 'show' && window.monitorManager) {
+               window.monitorManager.showMonitor(cameraData.camera_name);
+           } else if (action === 'hide' && window.monitorManager) {
+               window.monitorManager.hideMonitor(cameraData.camera_name);
+           }
+      });
+      
+      console.log(`[CAMERA] ${action === 'show' ? 'Showed' : 'Hidden'} ${camerasData.length} camera(s)`);
  }
 
 // 发送文本
