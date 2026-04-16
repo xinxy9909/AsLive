@@ -372,38 +372,47 @@ class MonitorTools:
             }
     
     def show_all_cameras(self, platform: str = "all") -> dict:
-        """显示所有摄像头"""
-        try:
-            if platform not in ["JinLiLite", "ChiWen", "all"]:
-                platform = "all"
-            
-            shown_list = self.state.show_all_cameras(
-                platform if platform != "all" else None
-            )
-            
-            result = {
-                "status": "success",
-                "action": "show_all_cameras",
-                "data": {
-                    "platform": platform,
-                    "shown_cameras": shown_list,
-                    "message": f"已显示 {len(shown_list)} 个摄像头"
-                }
-            }
-            
-            logger.info(f"Showed {len(shown_list)} cameras on platform: {platform}")
-            return result
-        
-        except Exception as e:
-            logger.error(f"show_all_cameras error: {e}")
-            return {
-                "status": "error",
-                "action": "show_all_cameras",
-                "error": {
-                    "code": "SHOW_ALL_FAILED",
-                    "message": str(e)
-                }
-            }
+          """显示所有摄像头"""
+          try:
+              if platform not in ["JinLiLite", "ChiWen", "all"]:
+                  platform = "all"
+              
+              shown_list = self.state.show_all_cameras(
+                  platform if platform != "all" else None
+              )
+              
+              shown_cameras = []
+              for camera_name in shown_list:
+                  camera = self.state.get_camera(camera_name)
+                  if camera:
+                      shown_cameras.append({
+                          "camera_name": camera.name,
+                          "url": camera.url,
+                          "platform": camera.platform,
+                          "visible": camera.visible,
+                          "status": camera.status.value
+                      })
+              
+              result = {
+                  "status": "success",
+                  "action": "show_all_cameras",
+                  "data": shown_cameras,
+                  "message": f"已显示 {len(shown_cameras)} 个摄像头"
+              }
+              
+              logger.info(f"Showed {len(shown_cameras)} cameras on platform: {platform}")
+              return result
+          
+          except Exception as e:
+              logger.error(f"show_all_cameras error: {e}")
+              return {
+                  "status": "error",
+                  "action": "show_all_cameras",
+                  "error": {
+                      "code": "SHOW_ALL_FAILED",
+                      "message": str(e)
+                  }
+              }
     
     def execute_tool(self, tool_name: str, tool_input: dict) -> dict:
         """执行指定的工具"""

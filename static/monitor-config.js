@@ -2,14 +2,15 @@
 
 /**
  * 监控视频流配置
- * 修改这里来配置你的监控视频
+ * 注意：具体的摄像头配置由后端通过 tool_action 事件下发
+ * 前端不再硬编码摄像头信息，而是动态接收后端数据
  */
 const MONITOR_CONFIG = {
     // 启用监控系统
     enabled: true,
     
     // 默认显示模式: 'ui' | '3d' | 'both' | 'none'
-    // 改为 'none' 以默认隐藏所有监控
+    // 改为 'none' 以默认隐藏所有监控（所有摄像头默认关闭）
     defaultView: 'none',
     
     // 3D默认布局: 'ring' | 'screen' | 'spherical'
@@ -19,30 +20,10 @@ const MONITOR_CONFIG = {
     panelWidth: 320,
     panelHeight: 180,
     
-    // 监控列表
-    monitors: [
-        {
-            id: 'monitor-1',
-            name: '监控 #1',
-            url: 'https://monitor.data.labillion.cn/live/8825673d-4ad5-4bae-9345-d5edb45fedb2_1080p.m3u8',
-            description: '主进出口',
-            enabled: false  // 默认关闭
-        },
-        {
-            id: 'monitor-2',
-            name: '监控 #2',
-            url: 'https://monitor.data.labillion.cn/live/8825673d-4ad5-4bae-9345-d5edb45fedb3_1080p.m3u8',
-            description: '走廊区域',
-            enabled: false  // 默认关闭
-        },
-        {
-            id: 'monitor-3',
-            name: '监控 #3',
-            url: 'https://monitor.data.labillion.cn/live/8825673d-4ad5-4bae-9345-d5edb45fedb4_1080p.m3u8',
-            description: '工作区域',
-            enabled: false  // 默认关闭
-        }
-    ],
+    // 监控列表 - 已弃用
+    // 摄像头配置现在由后端通过 tool_action 事件下发
+    // 前端动态创建摄像头，无需在此配置
+    monitors: [],
     
     // HLS.js配置
     hlsConfig: {
@@ -104,32 +85,10 @@ const MONITOR_CONFIG = {
  */
 function initializeMonitorConfig() {
     if (!MONITOR_CONFIG.enabled) {
-        console.log('Monitor system is disabled');
         return;
     }
     
-    console.log('Initializing Monitor Config...', MONITOR_CONFIG);
-    
-    // 延迟以确保所有系统都已初始化
     setTimeout(() => {
-        // 添加所有配置的监控
-        MONITOR_CONFIG.monitors.forEach(monitor => {
-            if (monitor.enabled) {
-                window.monitorManager.addMonitor({
-                    id: monitor.id,
-                    name: monitor.name,
-                    url: monitor.url,
-                    width: MONITOR_CONFIG.panelWidth,
-                    height: MONITOR_CONFIG.panelHeight
-                });
-                
-                if (MONITOR_CONFIG.debug) {
-                    console.log(`Added monitor: ${monitor.id} - ${monitor.name}`);
-                }
-            }
-        });
-        
-        // 根据配置显示监控
         if (MONITOR_CONFIG.defaultView === 'ui' || MONITOR_CONFIG.defaultView === 'both') {
             window.monitorController.showAllMonitors();
         }
@@ -140,18 +99,14 @@ function initializeMonitorConfig() {
             }, 1000);
         }
         
-        // 如果是 'none' 模式，默认隐藏所有监控
         if (MONITOR_CONFIG.defaultView === 'none') {
             window.monitorController.hideAllMonitors();
         }
         
-        // 设置默认3D布局
         if (window.monitor3D) {
             window.monitor3D.layoutConfig.spacing = MONITOR_CONFIG.scene3D.spacing;
             window.monitor3D.layoutConfig.sphereRadius = MONITOR_CONFIG.scene3D.sphereRadius;
         }
-        
-        console.log('Monitor Config initialized successfully');
     }, 1000);
 }
 
@@ -167,7 +122,6 @@ function addMonitorDynamically(id, name, url) {
         height: MONITOR_CONFIG.panelHeight
     });
     
-    // 立即显示
     window.monitorManager.showMonitor(id);
 }
 
@@ -179,8 +133,6 @@ function updateHLSConfig(newConfig) {
         ...MONITOR_CONFIG.hlsConfig,
         ...newConfig
     };
-    
-    console.log('HLS Config updated:', MONITOR_CONFIG.hlsConfig);
 }
 
 /**
@@ -189,8 +141,6 @@ function updateHLSConfig(newConfig) {
 function setDebugMode(enabled) {
     MONITOR_CONFIG.debug = enabled;
     MONITOR_CONFIG.logLevel = enabled ? 'debug' : 'info';
-    
-    console.log('Debug mode:', enabled);
 }
 
 /**
@@ -204,10 +154,7 @@ function getMonitorConfig() {
  * 重置为默认配置
  */
 function resetMonitorConfig() {
-    // 隐藏所有监控
     window.monitorController.hideAllMonitors();
-    
-    // 重新初始化
     initializeMonitorConfig();
 }
 

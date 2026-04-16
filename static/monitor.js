@@ -31,14 +31,10 @@ class MonitorManager {
      * 初始化HLS.js库
      */
     initHLSLibrary() {
-        // 检查是否已加载HLS.js
         if (!window.HLS) {
             const script = document.createElement('script');
             script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.4.12/dist/hls.min.js';
             script.async = true;
-            script.onload = () => {
-                console.log('HLS.js loaded successfully');
-            };
             document.head.appendChild(script);
             this.hlsScript = script;
         }
@@ -270,13 +266,11 @@ class MonitorManager {
         
         if (!video || !config) return;
         
-        // 设置视频加载事件
         video.addEventListener('loadstart', () => this.setStatus(monitorId, 'LOADING'));
         video.addEventListener('loadeddata', () => this.setStatus(monitorId, 'ONLINE'));
         video.addEventListener('error', () => this.setStatus(monitorId, 'ERROR'));
         video.addEventListener('stalled', () => this.setStatus(monitorId, 'STALLED'));
         
-        // 使用HLS.js处理M3U8流
         if (window.HLS && HLS.isSupported()) {
             const hls = new HLS({
                 enableWorker: true,
@@ -289,7 +283,6 @@ class MonitorManager {
             hls.attachMedia(video);
             
             hls.on(HLS.Events.MANIFEST_PARSED, () => {
-                console.log(`Monitor ${monitorId} HLS manifest loaded`);
                 video.play().catch(err => {
                     console.warn(`Auto-play failed for ${monitorId}:`, err);
                 });
@@ -302,7 +295,6 @@ class MonitorManager {
             
             this.players.set(monitorId, hls);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Safari原生支持HLS
             video.src = config.url;
             video.play().catch(err => {
                 console.warn(`Auto-play failed for ${monitorId}:`, err);
@@ -387,14 +379,12 @@ class MonitorManager {
             statusEl.className = `monitor-status status-${status.toLowerCase()}`;
         }
         
-        // 更新时间戳
         const timestampEl = document.getElementById(`timestamp-${monitorId}`);
         if (timestampEl) {
             const now = new Date();
             timestampEl.textContent = now.toTimeString().split(' ')[0];
         }
         
-        // 处理加载动画
         const loadingEl = document.getElementById(`loading-${monitorId}`);
         if (loadingEl) {
             loadingEl.style.display = status === 'LOADING' ? 'flex' : 'none';

@@ -42,12 +42,11 @@ function init3D() {
 
 // --- 2. AUDIO & VISUALIZER ---
 let audioContext, analyser, dataArray;
-let micAnalyser, micDataArray; // 分离麦克风分析器
+let micAnalyser, micDataArray;
 let isAudioInit = false;
 let smoothedBass = 0;
 let smoothedAvg = 0;
 
-// Mini Monitor
 const monitorCanvas = document.getElementById('mini-monitor');
 const monitorCtx = monitorCanvas.getContext('2d');
 
@@ -55,13 +54,11 @@ function initAudioContext() {
     if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         
-        // 播放用的分析器 (连接到 Destination)
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         analyser.smoothingTimeConstant = 0.8;
         dataArray = new Uint8Array(analyser.frequencyBinCount);
         
-        // 麦克风用的分析器 (不连接到 Destination)
         micAnalyser = audioContext.createAnalyser();
         micAnalyser.fftSize = 256;
         micAnalyser.smoothingTimeConstant = 0.8;
@@ -73,15 +70,6 @@ function initAudioContext() {
         audioContext.resume();
     }
 }
-
-// ... (Create initMicAudio helper if needed, but handled in record logic)
-
-// 录音逻辑中:
-// source.connect(micAnalyser); 
-
-// 动画循环中:
-// if (isRecording) { micAnalyser.getByteFrequencyData(micDataArray); ... use micDataArray }
-// else if (isPlaying) { analyser.getByteFrequencyData(dataArray); ... use dataArray }
 
 // --- 3. LOGIC & INTERACTION ---
 const recordBtn = document.getElementById('record-btn');
@@ -177,8 +165,6 @@ let streamGeneration = 0;
 
 // 打断当前回复：取消 SSE 流、清空音频队列、停止播放
 async function interruptCurrent() {
-    // ⚠️ 全部同步操作必须在 await 之前完成。
-    // await reader.cancel() 会让出事件循环，旧 handleStream 可能趁机推送音频。
     streamGeneration++;   // 递增代次，旧 handleStream 的推送全部作废
     audioQueue = [];
     isPlaying = false;
@@ -187,7 +173,6 @@ async function interruptCurrent() {
     audioPlayer.removeAttribute('src');
     audioPlayer.load();
 
-    // SSE 流取消是异步操作，放在最后
     if (currentReader) {
         try { await currentReader.cancel(); } catch (_) {}
         currentReader = null;
@@ -245,7 +230,6 @@ async function playNextAudio() {
 
     // 创建源并连接
     if (!currentAudioSource) {
-        // fix: 只需要创建一次
         try {
             const source = audioContext.createMediaElementSource(audioPlayer);
             source.connect(analyser);
@@ -268,11 +252,9 @@ async function playNextAudio() {
 async function handleStream(response) {
      const reader = response.body.getReader();
      currentReader = reader;
-     const myGen = streamGeneration; // 捕获本次代次
+     const myGen = streamGeneration;
      const decoder = new TextDecoder();
- 
-     // 每次 handleStream 直接创建独立的消息元素，
-     // 不依赖任何 DOM 全局状态，彻底杜绝消息混合。
+  
      const assistantMsgEl = document.createElement('div');
      assistantMsgEl.className = 'message assistant';
      assistantMsgEl.innerHTML = `
@@ -281,54 +263,50 @@ async function handleStream(response) {
      `;
      chatHistory.appendChild(assistantMsgEl);
      chatHistory.scrollTop = chatHistory.scrollHeight;
- 
+  
      while (true) {
          let done, value;
          try {
-             ({ done, value } = await reader.read());
+              ({ done, value } = await reader.read());
          } catch (_) {
-             break; // reader 被取消（打断）
+              break;
          }
          if (done) break;
- 
-         // 代次不匹配说明已被打断，立即停止处理
+  
          if (myGen !== streamGeneration) break;
- 
+  
          const chunk = decoder.decode(value);
          const lines = chunk.split('\n\n');
- 
+  
          for (const line of lines) {
-             if (line.startsWith('data: ')) {
-                 try {
-                     const data = JSON.parse(line.slice(6));
- 
-                     if (data.type === 'start') {
-                         setStatus('PROCESSING...', 'busy');
-                     } else if (data.type === 'text') {
-                         const contentDiv = assistantMsgEl.querySelector('.message-content');
-                         contentDiv.textContent += data.content;
-                         chatHistory.scrollTop = chatHistory.scrollHeight;
-                     } else if (data.type === 'audio') {
-                         // 代次匹配才推送音频，防止旧流在 await 间隙塞入过期音频
-                         if (myGen === streamGeneration) {
-                             audioQueue.push(data);
-                             if (!isPlaying) {
-                                 playNextAudio();
-                             }
-                         }
-                     } else if (data.type === 'asr') {
-                         addMessage('user', data.text);
-                     } else if (data.type === 'tool_action') {
-                         // 处理Monitor Agent的工具执行结果
-                         console.log('Tool action received:', data);
-                         handleToolAction(data);
-                     } else if (data.type === 'end') {
-                         // 流结束，无需额外处理
-                     }
-                 } catch (e) {
-                     console.error('Parse error:', e);
-                 }
-             }
+              if (line.startsWith('data: ')) {
+                  try {
+                      const data = JSON.parse(line.slice(6));
+  
+                      if (data.type === 'start') {
+                          setStatus('PROCESSING...', 'busy');
+                      } else if (data.type === 'text') {
+                          const contentDiv = assistantMsgEl.querySelector('.message-content');
+                          contentDiv.textContent += data.content;
+                          chatHistory.scrollTop = chatHistory.scrollHeight;
+                      } else if (data.type === 'audio') {
+                          if (myGen === streamGeneration) {
+                              audioQueue.push(data);
+                              if (!isPlaying) {
+                                  playNextAudio();
+                              }
+                          }
+                      } else if (data.type === 'asr') {
+                          addMessage('user', data.text);
+                      } else if (data.type === 'tool_action') {
+                          handleToolAction(data);
+                      } else if (data.type === 'end') {
+                          // 流结束
+                      }
+                  } catch (e) {
+                      console.error('Parse error:', e);
+                  }
+              }
          }
      }
      if (currentReader === reader) currentReader = null;
@@ -340,22 +318,97 @@ async function handleStream(response) {
 function handleToolAction(toolAction) {
      const { tool_name, tool_input, tool_result } = toolAction;
      
-     console.log(`Executing tool: ${tool_name}`, {input: tool_input, result: tool_result});
-     
-     // 更新监控器状态
-     if (window.monitorControl) {
-         if (tool_name === 'show_camera' && tool_input.camera_name) {
-             window.monitorControl.showCamera(tool_input.camera_name);
-         } else if (tool_name === 'hide_camera' && tool_input.camera_name) {
-             window.monitorControl.hideCamera(tool_input.camera_name);
-         } else if (tool_name === 'show_all_cameras') {
-             window.monitorControl.showAllCameras();
-         } else if (tool_name === 'hide_all_cameras') {
-             window.monitorControl.hideAllCameras();
-         } else if (tool_name === 'zoom_camera' && tool_input.camera_name) {
-             window.monitorControl.zoomCamera(tool_input.camera_name);
-         }
+     if (tool_result.status !== 'success') {
+          console.warn(`Tool execution failed: ${tool_result.error || 'unknown error'}`);
+          return;
      }
+     
+     if (tool_name === 'show_camera' || tool_name === 'hide_camera' || tool_name === 'zoom_camera') {
+          handleSingleCameraAction(tool_name, tool_result.data);
+     } else if (tool_name === 'show_all_cameras') {
+          handleMultipleCamerasAction('show', tool_result.data);
+     } else if (tool_name === 'hide_all_cameras') {
+          handleMultipleCamerasAction('hide', tool_result.data);
+     }
+ }
+
+/**
+ * 处理单个摄像头的操作
+ */
+function handleSingleCameraAction(action, cameraData) {
+     if (!cameraData || !cameraData.camera_name) {
+          console.error('Invalid camera data:', cameraData);
+          return;
+     }
+     
+     const cameraName = cameraData.camera_name;
+     const cameraUrl = cameraData.url;
+     
+     if (window.monitorManager && !window.monitorManager.monitors.has(cameraName)) {
+          window.monitorManager.addMonitor({
+              id: cameraName,
+              name: cameraName,
+              url: cameraUrl,
+              width: 320,
+              height: 180
+          });
+     }
+     
+     if (action === 'show_camera') {
+          if (window.monitorManager) {
+              window.monitorManager.showMonitor(cameraName);
+              addMessage('system', `[CAMERA] Showed camera: ${cameraName}`);
+          }
+     } else if (action === 'hide_camera') {
+          if (window.monitorManager) {
+              window.monitorManager.hideMonitor(cameraName);
+              addMessage('system', `[CAMERA] Hidden camera: ${cameraName}`);
+          }
+     } else if (action === 'zoom_camera') {
+          if (window.monitorManager) {
+              window.monitorManager.showMonitor(cameraName);
+              if (window.monitor3D && window.monitorManager.videoElements.has(cameraName)) {
+                  const videoElement = window.monitorManager.videoElements.get(cameraName);
+                  window.monitor3D.showMonitorIn3D(
+                      cameraName,
+                      videoElement,
+                      window.monitorController?.currentLayout || 'ring',
+                      0
+                  );
+              }
+              addMessage('system', `[CAMERA] Zoomed camera: ${cameraName}`);
+          }
+     }
+ }
+
+/**
+ * 处理多摄像头操作
+ */
+function handleMultipleCamerasAction(action, camerasData) {
+     if (!Array.isArray(camerasData)) {
+          console.error('Invalid cameras data:', camerasData);
+          return;
+     }
+     
+     camerasData.forEach(cameraData => {
+          if (window.monitorManager && !window.monitorManager.monitors.has(cameraData.camera_name)) {
+              window.monitorManager.addMonitor({
+                  id: cameraData.camera_name,
+                  name: cameraData.camera_name,
+                  url: cameraData.url,
+                  width: 320,
+                  height: 180
+              });
+          }
+          
+          if (action === 'show' && window.monitorManager) {
+              window.monitorManager.showMonitor(cameraData.camera_name);
+          } else if (action === 'hide' && window.monitorManager) {
+              window.monitorManager.hideMonitor(cameraData.camera_name);
+          }
+     });
+     
+     addMessage('system', `[CAMERA] ${action === 'show' ? 'Showed' : 'Hidden'} ${camerasData.length} camera(s)`);
  }
 
 // 发送文本
@@ -521,24 +574,16 @@ function animate() {
 
 // 初始化
 try {
-    console.log("Initializing 3D Scene...");
     init3D();
     
-    // 初始化监控系统
     setTimeout(() => {
-        console.log("Initializing Monitor System...");
         initializeMonitorSystem(scene);
-        
-        // 使用配置文件初始化监控
         initializeMonitorConfig();
-        
-        console.log("Monitor system initialized with config");
     }, 500);
     
     animate();
 } catch (e) {
     console.error("3D Init Failed:", e);
-    // 即使 3D 失败，也要让聊天可用
 }
 
 console.log("App loaded, binding events...");
@@ -546,17 +591,13 @@ console.log("App loaded, binding events...");
 // 事件绑定
 if (sendBtn) {
     sendBtn.addEventListener('click', () => {
-        console.log("Send button clicked");
         sendText();
     });
-} else {
-    console.error("Send button not found!");
 }
 
 if (textInput) {
     textInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
-            console.log("Enter key pressed");
             sendText();
         }
     });
