@@ -300,6 +300,19 @@ body {
     text-shadow: 0 0 10px var(--accent-cyan);
 }
 
+.main-ctrl-btn.activated {
+    border-color: var(--accent-purple);
+    background: rgba(189, 0, 255, 0.1);
+    box-shadow: 0 0 30px rgba(189, 0, 255, 0.4);
+    width: 90px;
+    height: 90px;
+}
+
+.main-ctrl-btn.activated .mic-icon {
+    color: var(--accent-purple);
+    text-shadow: 0 0 10px var(--accent-purple);
+}
+
 .main-ctrl-btn.recording {
     border-color: var(--accent-error);
     background: rgba(255, 0, 85, 0.1);

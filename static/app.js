@@ -84,10 +84,15 @@ const clearHistoryBtn = document.getElementById('clear-history');
 let mediaRecorder;
 let audioChunks = [];
 let isRecording = false;
-let isAlwaysListening = false; // 持续监听模式
 let silenceStartTime = null;
-const SILENCE_THRESHOLD = 15; // 静音阈值 (根据实际环境调整)
-const SILENCE_DURATION = 1000; // 静音持续时间 (ms)
+const SILENCE_THRESHOLD = 15;
+const SILENCE_DURATION = 1000;
+
+// 唤醒词配置
+const WAKE_WORD = 'mega';
+let isWakeWordMode = false;
+let wakeWordRecognizer = null;
+let isWakeWordListening = false;
 
 // 开启录音函数
 async function startRecording() {
@@ -100,10 +105,15 @@ async function startRecording() {
         mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
         
         mediaRecorder.onstop = async () => {
-            // 停止麦克风流的所有轨道
             stream.getTracks().forEach(track => track.stop());
+            recordBtn.classList.remove('activated');
 
-            await interruptCurrent(); // 打断当前回复
+            // 录音结束后立即恢复唤醒词监听，无需等待 AI 回复播放完毕
+            if (isWakeWordMode) {
+                startWakeWordListening();
+            }
+
+            await interruptCurrent();
 
             const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
             setStatus('UPLOADING...', 'busy');
@@ -137,8 +147,7 @@ async function startRecording() {
     } catch (e) {
         console.error('Mic error:', e);
         alert('无法访问麦克风');
-        isAlwaysListening = false;
-        recordBtn.classList.remove('active');
+        disableWakeWordMode();
     }
 }
 
@@ -150,6 +159,120 @@ function stopRecording() {
         recordBtn.classList.remove('recording');
         silenceStartTime = null;
     }
+}
+
+// --- 唤醒词相关函数 ---
+
+function playBeep() {
+    initAudioContext();
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    osc.connect(gain);
+    gain.connect(audioContext.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, audioContext.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.15);
+    osc.start(audioContext.currentTime);
+    osc.stop(audioContext.currentTime + 0.15);
+    return new Promise(resolve => setTimeout(resolve, 200));
+}
+
+function startWakeWordListening() {
+    if (!isWakeWordMode || isRecording || isWakeWordListening) return;
+
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognitionAPI) {
+        console.warn('[Wake] SpeechRecognition API 不可用，建议使用 Chrome/Edge');
+        return;
+    }
+
+    wakeWordRecognizer = new SpeechRecognitionAPI();
+    wakeWordRecognizer.continuous = true;
+    wakeWordRecognizer.interimResults = true;
+    wakeWordRecognizer.lang = 'en-US';
+
+    wakeWordRecognizer.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript.toLowerCase().trim();
+            console.log('[Wake] 识别到:', transcript);
+            if (transcript.includes(WAKE_WORD)) {
+                onWakeWordDetected();
+                return;
+            }
+        }
+    };
+
+    wakeWordRecognizer.onerror = (event) => {
+        isWakeWordListening = false;
+        if (event.error === 'not-allowed') {
+            disableWakeWordMode();
+            return;
+        }
+        if (isWakeWordMode && !isRecording) {
+            setTimeout(startWakeWordListening, 1000);
+        }
+    };
+
+    wakeWordRecognizer.onend = () => {
+        isWakeWordListening = false;
+        if (isWakeWordMode && !isRecording) {
+            setTimeout(startWakeWordListening, 200);
+        }
+    };
+
+    try {
+        wakeWordRecognizer.start();
+        isWakeWordListening = true;
+        setStatus("SAY 'MEGA'...");
+        const label = recordBtn.querySelector('.btn-label');
+        if (label) label.textContent = "SAY 'MEGA'";
+    } catch (e) {
+        console.error('[Wake] 启动失败:', e);
+        isWakeWordListening = false;
+    }
+}
+
+function stopWakeWordListening() {
+    isWakeWordListening = false;
+    if (wakeWordRecognizer) {
+        try { wakeWordRecognizer.abort(); } catch (_) {}
+        wakeWordRecognizer = null;
+    }
+}
+
+async function onWakeWordDetected() {
+    if (isRecording) return;
+    console.log('[Wake] "MEGA" 唤醒成功！');
+
+    stopWakeWordListening();
+    setStatus('MEGA!', 'busy');
+    recordBtn.classList.add('activated');
+    const label = recordBtn.querySelector('.btn-label');
+    if (label) label.textContent = 'MEGA!';
+
+    await interruptCurrent();
+    initAudioContext();
+    await playBeep();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    startRecording();
+}
+
+function enableWakeWordMode() {
+    isWakeWordMode = true;
+    recordBtn.classList.add('active');
+    const label = recordBtn.querySelector('.btn-label');
+    if (label) label.textContent = "SAY 'MEGA'";
+    startWakeWordListening();
+}
+
+function disableWakeWordMode() {
+    isWakeWordMode = false;
+    stopWakeWordListening();
+    stopRecording();
+    recordBtn.classList.remove('active', 'activated', 'recording');
+    const label = recordBtn.querySelector('.btn-label');
+    if (label) label.textContent = 'WAKE WORD';
+    setStatus('WAITING FOR INPUT...');
 }
 
 // 音频播放队列
@@ -229,13 +352,7 @@ function addMessage(role, content) {
 async function playNextAudio() {
     if (audioQueue.length === 0) {
         isPlaying = false;
-        setStatus('WAITING FOR INPUT...');
-        
-        // --- 持续监听模式的关键点 ---
-        if (isAlwaysListening) {
-            console.log("Continuous Mode: Playback finished, restarting listener...");
-            setTimeout(startRecording, 500); // 稍微延迟一下，避免回音干扰
-        }
+        setStatus(isWakeWordMode ? "SAY 'MEGA'..." : 'WAITING FOR INPUT...');
         return;
     }
 
@@ -542,23 +659,13 @@ async function sendText() {
     }
 }
 
-// 录音逻辑
+// 录音逻辑（唤醒词模式）
 if (navigator.mediaDevices) {
     recordBtn.addEventListener('click', () => {
-        if (!isAlwaysListening) {
-            // 切换到持续监听模式
-            isAlwaysListening = true;
-            recordBtn.classList.add('active'); // CSS中可以增加一个 active 状态表示开启了循环
-            const label = recordBtn.querySelector('.btn-label');
-            if (label) label.textContent = 'ALWAYS LISTENING';
-            startRecording();
+        if (!isWakeWordMode) {
+            enableWakeWordMode();
         } else {
-            // 关闭持续监听模式
-            isAlwaysListening = false;
-            recordBtn.classList.remove('active');
-            const label = recordBtn.querySelector('.btn-label');
-            if (label) label.textContent = 'TAP TO SPEAK';
-            stopRecording();
+            disableWakeWordMode();
         }
     });
 }
@@ -691,13 +798,16 @@ function animate() {
 // 初始化
 try {
     init3D();
-    
+
     setTimeout(() => {
         initializeMonitorSystem(scene);
         initializeMonitorConfig();
     }, 500);
-    
+
     animate();
+
+    // 页面加载后自动开启唤醒词监听
+    setTimeout(() => enableWakeWordMode(), 1000);
 } catch (e) {
     console.error("3D Init Failed:", e);
 }
