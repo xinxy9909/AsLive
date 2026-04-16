@@ -137,6 +137,19 @@ async def process_streaming(user_text: str, speak_id: str = "zf_001", speed: flo
         if current_gen != my_gen:
             return
 
+        # **[NEW] 检测是否为 tool_action 事件（来自 Monitor Agent）**
+        # Monitor Agent 可能会 yield JSON 格式的 tool_action 事件
+        try:
+            potential_event = json.loads(chunk)
+            if isinstance(potential_event, dict) and potential_event.get('type') == 'tool_action':
+                # 这是一个 tool_action 事件，直接转发给前端，不做文本处理
+                print(f"[SSE] Tool action event detected: {potential_event.get('tool_name')}")
+                yield f"data: {json.dumps(potential_event)}\n\n"
+                continue
+        except (json.JSONDecodeError, ValueError):
+            # 不是 JSON，当作普通文本处理
+            pass
+
         full_response += chunk
 
         # 发送文本片段
