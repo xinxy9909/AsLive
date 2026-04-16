@@ -15,14 +15,15 @@ def test_organoid_sse_with_end_event():
     print("=" * 70)
     
     # 模拟 SSE 响应数据，包括 end 事件
+    # 注意：实际的 Organoid API 返回 "content" 字段，而不是 "data" 字段
     sse_response = """event: message
-data: {"type": "ai", "data": "我来帮您分析IPS"}
+data: {"type": "ai", "content": "我来帮您分析IPS"}
 event: message
 data: {"type": "thinking", "data": "思考过程..."}
 event: message
-data: {"type": "ai", "data": "心脏类器官的"}
+data: {"type": "ai", "content": "心脏类器官的"}
 event: message
-data: {"type": "ai", "data": "原代培养..."}
+data: {"type": "ai", "content": "原代培养..."}
 event: end
 data: {"total_rounds": 3}
 event: message
@@ -131,7 +132,7 @@ def test_edge_cases_with_end_event():
     # 测试情况 1: end 事件中的 total_rounds 为 0
     print("\n[1] 测试 total_rounds=0 的情况...")
     sse_response = """event: message
-data: {"type": "ai", "data": "新回复"}
+data: {"type": "ai", "content": "新回复"}
 event: end
 data: {"total_rounds": 0}
 event: message
@@ -151,9 +152,9 @@ data: [DONE]
     # 测试情况 2: 缺失 end 事件
     print("\n[2] 测试缺失 end 事件的情况...")
     sse_response = """event: message
-data: {"type": "ai", "data": "回复1"}
+data: {"type": "ai", "content": "回复1"}
 event: message
-data: {"type": "ai", "data": "回复2"}
+data: {"type": "ai", "content": "回复2"}
 event: message
 data: [DONE]
 """
@@ -183,11 +184,11 @@ def test_only_latest_flag():
     
     # 模拟包含 3 个 AI 消息的响应
     sse_response = """event: message
-data: {"type": "ai", "data": "历史回复1"}
+data: {"type": "ai", "content": "历史回复1"}
 event: message
-data: {"type": "ai", "data": "历史回复2"}
+data: {"type": "ai", "content": "历史回复2"}
 event: message
-data: {"type": "ai", "data": "最新回复"}
+data: {"type": "ai", "content": "最新回复"}
 event: end
 data: {"total_rounds": 3}
 event: message

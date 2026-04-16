@@ -293,6 +293,7 @@ async def audio_chat(
 
 
 @app.get("/history")
+
 async def get_history():
     """获取对话历史"""
     return {"history": conversation_history}

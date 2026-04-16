@@ -67,7 +67,7 @@ class MonitorAgent(BaseAgent):
             messages: 消息列表
             
         Yields:
-            推理结果流
+            推理结果流（文本或JSON格式的工具动作事件）
         """
         # 构建发送给LLM的消息
         llm_messages = [
@@ -124,14 +124,24 @@ class MonitorAgent(BaseAgent):
                     # 执行工具
                     tool_result = self.tools.execute_tool(tool_name, tool_input)
                     
+                    logger.info(f"Tool result: {tool_result}")
+                    
+                    # **关键：向前端发送工具执行结果**
+                    # 以JSON格式发送，前端会识别并处理
+                    tool_action_event = {
+                        "type": "tool_action",
+                        "tool_name": tool_name,
+                        "tool_input": tool_input,
+                        "tool_result": tool_result
+                    }
+                    yield json.dumps(tool_action_event, ensure_ascii=False)
+                    
                     tool_results.append({
                         "tool_call_id": tool_call["id"],
                         "role": "tool",
                         "name": tool_name,
                         "content": json.dumps(tool_result, ensure_ascii=False)
                     })
-                    
-                    logger.info(f"Tool result: {tool_result}")
                 
                 # 添加工具结果到消息列表
                 llm_messages.extend(tool_results)

@@ -89,7 +89,7 @@ def _parse_sse(response: requests.Response, only_latest: bool = False):
         only_latest: 如果为 True，仅返回最新消息；如果为 False，返回全部 AI 消息
         
     Yields:
-        content 字符串
+        (content, total_rounds) 元组，其中 total_rounds 在收到 end 事件时更新
     """
     current_event = None
     total_rounds = 0
@@ -132,7 +132,8 @@ def _parse_sse(response: requests.Response, only_latest: bool = False):
                     
                     # 只输出 type 为 ai 的消息
                     if current_data.get("type") == "ai":
-                        content = current_data.get("data", "")
+                        # 兼容两种字段名: "data" 和 "content"
+                        content = current_data.get("content") or current_data.get("data", "")
                         if content:
                             ai_message_count += 1
                             logger.debug(f"Yielding AI message #{ai_message_count}: {content[:50]}...")
@@ -145,15 +146,20 @@ def _parse_sse(response: requests.Response, only_latest: bool = False):
             else:
                 logger.debug(f"Skipping non-message event: {current_event}")
     
-    # 根据 only_latest 标志决定返回哪些消息
+    # 根据 only_latest 标志决定返回哪些消息，并附带 total_rounds
     if only_latest and total_rounds > 0:
         # 仅返回最新消息（位置为 total_rounds）
         if len(messages) > 0:
-            yield messages[-1]
+            yield (messages[-1], total_rounds)
     else:
-        # 返回全部消息
-        for msg in messages:
-            yield msg
+        # 返回全部消息，最后一条附带 total_rounds
+        for i, msg in enumerate(messages):
+            if i == len(messages) - 1:
+                # 最后一条消息时返回 total_rounds
+                yield (msg, total_rounds)
+            else:
+                # 其他消息返回 0（表示还有更多消息）
+                yield (msg, 0)
 
 
 
@@ -199,11 +205,13 @@ class OrganoidAgent(BaseAgent):
             resp = _resume_chat(thread_id, offset=current_offset)
             
             try:
-                # 解析 SSE 并获取最新的消息
-                for content in _parse_sse(resp, only_latest=False):
+                # 解析 SSE 并获取最新的消息与 total_rounds
+                for content, total_rounds in _parse_sse(resp, only_latest=False):
+                    # 仅当收到最后一条消息时（total_rounds > 0），更新偏移量
+                    if total_rounds > 0:
+                        self._last_total_rounds = total_rounds
+                        logger.info(f"Organoid: Updated offset to {self._last_total_rounds}")
                     yield content
-                    
-                logger.info(f"Organoid: Completed streaming for thread_id: {thread_id}")
                 
             finally:
                 resp.close()

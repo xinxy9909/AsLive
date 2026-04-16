@@ -266,69 +266,97 @@ async function playNextAudio() {
 
 // 处理 SSE 流
 async function handleStream(response) {
-    const reader = response.body.getReader();
-    currentReader = reader;
-    const myGen = streamGeneration; // 捕获本次代次
-    const decoder = new TextDecoder();
+     const reader = response.body.getReader();
+     currentReader = reader;
+     const myGen = streamGeneration; // 捕获本次代次
+     const decoder = new TextDecoder();
+ 
+     // 每次 handleStream 直接创建独立的消息元素，
+     // 不依赖任何 DOM 全局状态，彻底杜绝消息混合。
+     const assistantMsgEl = document.createElement('div');
+     assistantMsgEl.className = 'message assistant';
+     assistantMsgEl.innerHTML = `
+         <div class="role-label">AI CORE</div>
+         <div class="message-content"></div>
+     `;
+     chatHistory.appendChild(assistantMsgEl);
+     chatHistory.scrollTop = chatHistory.scrollHeight;
+ 
+     while (true) {
+         let done, value;
+         try {
+             ({ done, value } = await reader.read());
+         } catch (_) {
+             break; // reader 被取消（打断）
+         }
+         if (done) break;
+ 
+         // 代次不匹配说明已被打断，立即停止处理
+         if (myGen !== streamGeneration) break;
+ 
+         const chunk = decoder.decode(value);
+         const lines = chunk.split('\n\n');
+ 
+         for (const line of lines) {
+             if (line.startsWith('data: ')) {
+                 try {
+                     const data = JSON.parse(line.slice(6));
+ 
+                     if (data.type === 'start') {
+                         setStatus('PROCESSING...', 'busy');
+                     } else if (data.type === 'text') {
+                         const contentDiv = assistantMsgEl.querySelector('.message-content');
+                         contentDiv.textContent += data.content;
+                         chatHistory.scrollTop = chatHistory.scrollHeight;
+                     } else if (data.type === 'audio') {
+                         // 代次匹配才推送音频，防止旧流在 await 间隙塞入过期音频
+                         if (myGen === streamGeneration) {
+                             audioQueue.push(data);
+                             if (!isPlaying) {
+                                 playNextAudio();
+                             }
+                         }
+                     } else if (data.type === 'asr') {
+                         addMessage('user', data.text);
+                     } else if (data.type === 'tool_action') {
+                         // 处理Monitor Agent的工具执行结果
+                         console.log('Tool action received:', data);
+                         handleToolAction(data);
+                     } else if (data.type === 'end') {
+                         // 流结束，无需额外处理
+                     }
+                 } catch (e) {
+                     console.error('Parse error:', e);
+                 }
+             }
+         }
+     }
+     if (currentReader === reader) currentReader = null;
+ }
 
-    // 每次 handleStream 直接创建独立的消息元素，
-    // 不依赖任何 DOM 全局状态，彻底杜绝消息混合。
-    const assistantMsgEl = document.createElement('div');
-    assistantMsgEl.className = 'message assistant';
-    assistantMsgEl.innerHTML = `
-        <div class="role-label">AI CORE</div>
-        <div class="message-content"></div>
-    `;
-    chatHistory.appendChild(assistantMsgEl);
-    chatHistory.scrollTop = chatHistory.scrollHeight;
-
-    while (true) {
-        let done, value;
-        try {
-            ({ done, value } = await reader.read());
-        } catch (_) {
-            break; // reader 被取消（打断）
-        }
-        if (done) break;
-
-        // 代次不匹配说明已被打断，立即停止处理
-        if (myGen !== streamGeneration) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n\n');
-
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                try {
-                    const data = JSON.parse(line.slice(6));
-
-                    if (data.type === 'start') {
-                        setStatus('PROCESSING...', 'busy');
-                    } else if (data.type === 'text') {
-                        const contentDiv = assistantMsgEl.querySelector('.message-content');
-                        contentDiv.textContent += data.content;
-                        chatHistory.scrollTop = chatHistory.scrollHeight;
-                    } else if (data.type === 'audio') {
-                        // 代次匹配才推送音频，防止旧流在 await 间隙塞入过期音频
-                        if (myGen === streamGeneration) {
-                            audioQueue.push(data);
-                            if (!isPlaying) {
-                                playNextAudio();
-                            }
-                        }
-                    } else if (data.type === 'asr') {
-                        addMessage('user', data.text);
-                    } else if (data.type === 'end') {
-                        // 流结束，无需额外处理
-                    }
-                } catch (e) {
-                    console.error('Parse error:', e);
-                }
-            }
-        }
-    }
-    if (currentReader === reader) currentReader = null;
-}
+/**
+ * 处理工具动作事件 - 更新前端UI
+ */
+function handleToolAction(toolAction) {
+     const { tool_name, tool_input, tool_result } = toolAction;
+     
+     console.log(`Executing tool: ${tool_name}`, {input: tool_input, result: tool_result});
+     
+     // 更新监控器状态
+     if (window.monitorControl) {
+         if (tool_name === 'show_camera' && tool_input.camera_name) {
+             window.monitorControl.showCamera(tool_input.camera_name);
+         } else if (tool_name === 'hide_camera' && tool_input.camera_name) {
+             window.monitorControl.hideCamera(tool_input.camera_name);
+         } else if (tool_name === 'show_all_cameras') {
+             window.monitorControl.showAllCameras();
+         } else if (tool_name === 'hide_all_cameras') {
+             window.monitorControl.hideAllCameras();
+         } else if (tool_name === 'zoom_camera' && tool_input.camera_name) {
+             window.monitorControl.zoomCamera(tool_input.camera_name);
+         }
+     }
+ }
 
 // 发送文本
 async function sendText() {
@@ -495,6 +523,18 @@ function animate() {
 try {
     console.log("Initializing 3D Scene...");
     init3D();
+    
+    // 初始化监控系统
+    setTimeout(() => {
+        console.log("Initializing Monitor System...");
+        initializeMonitorSystem(scene);
+        
+        // 使用配置文件初始化监控
+        initializeMonitorConfig();
+        
+        console.log("Monitor system initialized with config");
+    }, 500);
+    
     animate();
 } catch (e) {
     console.error("3D Init Failed:", e);

@@ -17,13 +17,13 @@ def test_organoid_sse_parsing():
     
     # 模拟 SSE 响应数据
     sse_response = """event: message
-data: {"type": "ai", "data": "我来帮您分析IPS"}
+data: {"type": "ai", "content": "我来帮您分析IPS"}
 event: message
 data: {"type": "thinking", "data": "思考过程..."}
 event: message
-data: {"type": "ai", "data": "心脏类器官的"}
+data: {"type": "ai", "content": "心脏类器官的"}
 event: message
-data: {"type": "ai", "data": "原代培养..."}
+data: {"type": "ai", "content": "原代培养..."}
 event: message
 data: [DONE]
 """
@@ -79,7 +79,7 @@ def test_edge_cases():
     # 测试情况 1: 空消息
     print("\n[1] 测试空 AI 消息...")
     sse_response = """event: message
-data: {"type": "ai", "data": ""}
+data: {"type": "ai", "content": ""}
 event: message
 data: [DONE]
 """
@@ -99,11 +99,11 @@ data: [DONE]
     sse_response = """event: message
 data: {"type": "thinking", "data": "thinking1"}
 event: message
-data: {"type": "ai", "data": "response1"}
+data: {"type": "ai", "content": "response1"}
 event: message
 data: {"type": "planning", "data": "planning1"}
 event: message
-data: {"type": "ai", "data": "response2"}
+data: {"type": "ai", "content": "response2"}
 event: message
 data: [DONE]
 """
@@ -123,9 +123,9 @@ data: [DONE]
     # 测试情况 3: 非 message 事件
     print("\n[3] 测试非 message 事件...")
     sse_response = """event: heartbeat
-data: {"type": "ai", "data": "should_be_ignored"}
+data: {"type": "ai", "content": "should_be_ignored"}
 event: message
-data: {"type": "ai", "data": "should_be_included"}
+data: {"type": "ai", "content": "should_be_included"}
 event: message
 data: [DONE]
 """
